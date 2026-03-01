@@ -1,0 +1,21 @@
+[package]
+name = "chromoxide-image"
+version = "0.1.0"
+edition = "2024"
+description = "Image preprocessing and sampling for chromoxide"
+license = "MIT"
+repository = "https://github.com/werdxz/chromoxide"
+
+[dependencies]
+chromoxide = { path = "../chromoxide" }
+image = { version = "0.25", default-features = true }
+rand = "0.10"
+thiserror = "2"
+serde = { version = "1", features = ["derive"], optional = true }
+
+[features]
+default = []
+serde = ["dep:serde", "chromoxide/serde"]
+
+[dev-dependencies]
+approx = "0.5"
