@@ -1,0 +1,14 @@
+[package]
+name = "chrox"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.0", features = ["derive"] }
+toml = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+anyhow = "1.0"
+thiserror = "2.0"
+dirs = "5.0"
+# color library to be decided later
+# palette = "0.7"
