@@ -20,9 +20,15 @@ pub enum Error {
     #[error("failed to load config: {0}")]
     ConfigLoad(#[from] crate::config::Error),
     #[error("failed to discover palettes: {0}")]
-    PaletteDiscovery(#[from] crate::palette::registry::Error),
+    PaletteDiscovery(#[source] Box<crate::palette::registry::Error>),
     #[error("palette not found: {id}")]
     PaletteNotFound { id: String },
+}
+
+impl From<crate::palette::registry::Error> for Error {
+    fn from(source: crate::palette::registry::Error) -> Self {
+        Self::PaletteDiscovery(Box::new(source))
+    }
 }
 
 /// chromoxide CLI

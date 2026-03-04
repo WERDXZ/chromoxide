@@ -29,7 +29,7 @@ impl PaletteRegistry {
         for path in palette_files {
             let palette = PaletteFile::from_path(&path).map_err(|source| Error::LoadPalette {
                 path: path.clone(),
-                source,
+                source: Box::new(source),
             })?;
             let id = palette.id();
 
@@ -131,7 +131,7 @@ pub enum Error {
     LoadPalette {
         path: PathBuf,
         #[source]
-        source: super::user::Error,
+        source: Box<super::user::Error>,
     },
     #[error("duplicate palette id `{id}` from `{first}` and `{second}`")]
     DuplicateId {
