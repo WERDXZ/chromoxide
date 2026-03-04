@@ -16,3 +16,31 @@
 3. templating
   - which syntax??? be simplicit, we just need simple replace feature, and maybe color format conversion
   - Simple syntax for v1: {{palette.name (| filter)?}}
+
+4. CLI
+  - `chrox IMG [--config path] [--palettes path] [--dry-run]`
+  - `chrox list`
+  - `chrox show [palette]`
+
+5. Config
+  - general entries:
+    ...
+  - templates entries
+  ```toml
+    [[template]]
+    name = "..."
+    input = "some/file"
+    output = "some/file"
+  ```
+
+6. palette entries:
+    ```toml
+    name = "..." # id is slugified file name
+
+    [[slots]]
+    name = "..."
+    other slot constraints in chromoxide
+
+    [[terms]]
+    terms in chromoxide
+    ```
