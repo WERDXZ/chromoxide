@@ -5,10 +5,10 @@ edition = "2024"
 
 [dependencies]
 clap = { version = "4.0", features = ["derive"] }
-toml = "0.8"
+toml = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 anyhow = "1.0"
 thiserror = "2.0"
-dirs = "5.0"
-# color library to be decided later
-# palette = "0.7"
+dirs = "6.0"
+phf = { version = "0.13.1", features = ["macros"] }
+chromoxide = { path = "../chromoxide" }

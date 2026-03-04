@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 
 /// chromoxide CLI
@@ -67,7 +67,9 @@ pub fn run(args: Args) -> Result<()> {
             if !template_path.exists() {
                 bail!("Template not found: {:?}", template_path);
             }
-            if let Some(cfg) = &args.config && !cfg.exists() {
+            if let Some(cfg) = &args.config
+                && !cfg.exists()
+            {
                 bail!("Config not found: {:?}", cfg);
             }
 
