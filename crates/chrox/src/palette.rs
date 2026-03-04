@@ -5,6 +5,7 @@ use chromoxide::{ImageCap, Oklch, PaletteError, WeightedSample};
 use crate::solve_config::PartialSolveConfig;
 
 pub mod user;
+pub mod registry;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SolveError {
