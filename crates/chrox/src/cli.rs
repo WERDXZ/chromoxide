@@ -17,9 +17,9 @@ pub enum Error {
     PalettePathNotFound { path: PathBuf },
     #[error("config not found: {path}")]
     ConfigNotFound { path: PathBuf },
-    #[error("failed to load config")]
+    #[error("failed to load config: {0}")]
     ConfigLoad(#[from] crate::config::Error),
-    #[error("failed to discover palettes")]
+    #[error("failed to discover palettes: {0}")]
     PaletteDiscovery(#[from] crate::palette::registry::Error),
     #[error("palette not found: {id}")]
     PaletteNotFound { id: String },
@@ -66,7 +66,7 @@ pub fn run(args: Args) -> Result<(), Error> {
             let ctx = load_context(args.config.as_ref(), &args.palettes)?;
 
             println!("Configured templates: {}", ctx.config.templates.len());
-            println!("Palette search paths: {}", ctx.merged_palette_paths.len());
+            print_palette_paths(&ctx.merged_palette_paths);
 
             let mut user_ids = ctx
                 .registry
@@ -117,13 +117,11 @@ pub fn run(args: Args) -> Result<(), Error> {
             // 4) solve per required palette
             // 5) render template(s) -> output files
 
-            println!("Processing image: {:?}", image_path);
+            println!("Processing image: {}", image_path.display());
             if let Some(cfg) = &args.config {
-                println!("Using config: {:?}", cfg);
+                println!("Using config: {}", cfg.display());
             }
-            if !ctx.merged_palette_paths.is_empty() {
-                println!("Palette search paths: {:?}", ctx.merged_palette_paths);
-            }
+            print_palette_paths(&ctx.merged_palette_paths);
             println!("Configured templates: {}", ctx.config.templates.len());
             println!("Discovered {} user palettes", ctx.registry.user_palette_count());
 
@@ -190,6 +188,13 @@ fn normalize_parent(parent: Option<&Path>) -> PathBuf {
         PathBuf::from(".")
     } else {
         parent.to_path_buf()
+    }
+}
+
+fn print_palette_paths(paths: &[PathBuf]) {
+    println!("Palette search paths: {}", paths.len());
+    for path in paths {
+        println!("  - {}", path.display());
     }
 }
 
