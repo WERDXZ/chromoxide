@@ -2,8 +2,21 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("missing IMAGE. See --help")]
+    MissingImage,
+    #[error("missing --palette <PALETTE>. See --help")]
+    MissingPalette,
+    #[error("image not found: {path}")]
+    ImageNotFound { path: PathBuf },
+    #[error("template not found: {path}")]
+    TemplateNotFound { path: PathBuf },
+    #[error("config not found: {path}")]
+    ConfigNotFound { path: PathBuf },
+}
 
 /// chromoxide CLI
 #[derive(Parser, Debug)]
@@ -40,7 +53,7 @@ enum Commands {
     },
 }
 
-pub fn run(args: Args) -> Result<()> {
+pub fn run(args: Args) -> Result<(), Error> {
     match args.command {
         Some(Commands::List) => {
             // TODO: list built-in families / template search paths
@@ -54,23 +67,23 @@ pub fn run(args: Args) -> Result<()> {
         }
         None => {
             // Render mode (template-driven palette inference)
-            let image_path = args
-                .image
-                .ok_or_else(|| anyhow::anyhow!("Missing IMAGE. See --help"))?;
+            let image_path = args.image.ok_or(Error::MissingImage)?;
             let template_path = args
                 .palette
-                .ok_or_else(|| anyhow::anyhow!("Missing --template <TEMPLATE>. See --help"))?;
+                .ok_or(Error::MissingPalette)?;
 
             if !image_path.exists() {
-                bail!("Image not found: {:?}", image_path);
+                return Err(Error::ImageNotFound { path: image_path });
             }
             if !template_path.exists() {
-                bail!("Template not found: {:?}", template_path);
+                return Err(Error::TemplateNotFound {
+                    path: template_path,
+                });
             }
             if let Some(cfg) = &args.config
                 && !cfg.exists()
             {
-                bail!("Config not found: {:?}", cfg);
+                return Err(Error::ConfigNotFound { path: cfg.clone() });
             }
 
             // TODO:

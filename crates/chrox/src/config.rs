@@ -8,6 +8,9 @@
 //! name = "alacritty"
 //! input = "templates/alacritty.toml"
 //! output = ".config/alacritty/colors.toml"
+//!
+//! [config]
+//! seed_count = 24
 //! ```
 
 use std::{
@@ -17,12 +20,16 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+use crate::solve_config::PartialSolveConfig;
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
     pub general: GeneralConfig,
     #[serde(default)]
     pub templates: Vec<TemplateEntry>,
+    #[serde(default, alias = "solve")]
+    pub config: PartialSolveConfig,
 }
 
 impl FromStr for Config {
@@ -153,11 +160,15 @@ output = ".config/alacritty/colors.toml"
 name = "hypr"
 input = "templates/hyprland.conf"
 output = ".config/hypr/colors.conf"
+
+[config]
+seed_count = 20
 "#,
         )
         .expect("config should parse");
 
         assert_eq!(config.general.palettes.len(), 2);
+        assert_eq!(config.config.seed_count, Some(20));
 
         assert_eq!(config.templates.len(), 2);
         assert_eq!(
@@ -201,6 +212,9 @@ palettes = ["palettes"]
 name = "wezterm"
 input = "templates/wezterm.lua"
 output = ".config/wezterm/colors.lua"
+
+[config]
+keep_top_k = 3
 "#,
         )
         .expect("test config file should be written");
@@ -209,6 +223,7 @@ output = ".config/wezterm/colors.lua"
         assert_eq!(config.general.palettes, vec![PathBuf::from("palettes")]);
         assert_eq!(config.templates.len(), 1);
         assert_eq!(config.templates[0].name, "wezterm");
+        assert_eq!(config.config.keep_top_k, Some(3));
 
         let _ = std::fs::remove_file(config_path);
         let _ = std::fs::remove_dir_all(dir);

@@ -305,7 +305,6 @@ dependencies = [
 name = "chrox"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "chromoxide",
  "clap",
  "dirs",
