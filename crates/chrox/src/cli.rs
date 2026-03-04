@@ -1,8 +1,10 @@
 //! Argument parsing and command dispatch.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
+
+use crate::config::Config;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -14,6 +16,8 @@ pub enum Error {
     PalettePathNotFound { path: PathBuf },
     #[error("config not found: {path}")]
     ConfigNotFound { path: PathBuf },
+    #[error("failed to load config")]
+    ConfigLoad(#[from] crate::config::Error),
 }
 
 /// chromoxide CLI
@@ -83,21 +87,32 @@ pub fn run(args: Args) -> Result<(), Error> {
                 return Err(Error::ConfigNotFound { path: cfg.clone() });
             }
 
+            let config = Config::load(args.config.clone())?;
+            let config_base_dir = config_base_dir(args.config.as_ref());
+            let merged_palette_paths =
+                config.merged_palette_paths(&config_base_dir, &args.palettes);
+
+            for palette_path in &merged_palette_paths {
+                if !palette_path.exists() {
+                    return Err(Error::PalettePathNotFound {
+                        path: palette_path.clone(),
+                    });
+                }
+            }
+
             // TODO:
-            // 1) load config (or defaults)
-            // 2) merge palette search paths: config.general.palettes + CLI --palettes
-            // 3) load and parse configured templates
-            // 4) scan {{palette.member | filter}} references and infer required palettes
-            // 5) chromoxide-image: samples + cap
-            // 6) solve per required palette
-            // 7) render template(s) -> output files
+            // 1) load and parse configured templates
+            // 2) scan {{palette.member | filter}} references and infer required palettes
+            // 3) chromoxide-image: samples + cap
+            // 4) solve per required palette
+            // 5) render template(s) -> output files
 
             println!("Processing image: {:?}", image_path);
             if let Some(cfg) = &args.config {
                 println!("Using config: {:?}", cfg);
             }
-            if !args.palettes.is_empty() {
-                println!("Additional palette paths: {:?}", args.palettes);
+            if !merged_palette_paths.is_empty() {
+                println!("Palette search paths: {:?}", merged_palette_paths);
             }
 
             Ok(())
@@ -105,13 +120,41 @@ pub fn run(args: Args) -> Result<(), Error> {
     }
 }
 
+fn config_base_dir(config_path: Option<&PathBuf>) -> PathBuf {
+    match config_path {
+        Some(path) => normalize_parent(path.parent()),
+        None => {
+            let default_path = Config::default_path();
+            normalize_parent(default_path.parent())
+        }
+    }
+}
+
+fn normalize_parent(parent: Option<&Path>) -> PathBuf {
+    let parent = parent.unwrap_or_else(|| Path::new("."));
+    if parent.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        parent.to_path_buf()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use clap::Parser;
 
-    use super::{Args, Error, run};
+    use super::{Args, Error, config_base_dir, run};
+
+    fn unique_temp_dir() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("chrox-cli-test-{nanos}-{}", std::process::id()))
+    }
 
     #[test]
     fn parse_palettes_supports_comma_and_repeat() {
@@ -150,14 +193,66 @@ mod tests {
         let image_path = std::env::current_exe().expect("current executable should be available");
         let missing = PathBuf::from("/definitely/not/a/real/chrox-palette-path");
 
+        let dir = unique_temp_dir();
+        std::fs::create_dir_all(&dir).expect("test temp dir should be created");
+        let config_path = dir.join("config.toml");
+        std::fs::write(&config_path, "").expect("test config file should be written");
+
         let err = run(Args {
             command: None,
             image: Some(image_path),
             palettes: vec![missing.clone()],
-            config: None,
+            config: Some(config_path.clone()),
         })
         .expect_err("missing palette path should fail");
 
         assert!(matches!(err, Error::PalettePathNotFound { path } if path == missing));
+
+        let _ = std::fs::remove_file(config_path);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn render_mode_merges_config_palette_paths() {
+        let dir = unique_temp_dir();
+        std::fs::create_dir_all(&dir).expect("test temp dir should be created");
+
+        let image_path = std::env::current_exe().expect("current executable should be available");
+        let config_path = dir.join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[general]
+palettes = ["palettes"]
+"#,
+        )
+        .expect("test config file should be written");
+
+        let expected_missing = dir.join("palettes");
+        let err = run(Args {
+            command: None,
+            image: Some(image_path),
+            palettes: Vec::new(),
+            config: Some(config_path.clone()),
+        })
+        .expect_err("missing merged config palette path should fail");
+
+        assert!(
+            matches!(err, Error::PalettePathNotFound { ref path } if *path == expected_missing),
+            "expected missing path {:?}, got {err}",
+            expected_missing
+        );
+
+        let _ = std::fs::remove_file(config_path);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn config_base_dir_uses_parent_or_dot() {
+        assert_eq!(config_base_dir(Some(&PathBuf::from("config.toml"))), Path::new("."));
+        assert_eq!(
+            config_base_dir(Some(&PathBuf::from("cfg/chrox.toml"))),
+            Path::new("cfg")
+        );
     }
 }

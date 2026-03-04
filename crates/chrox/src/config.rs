@@ -14,6 +14,7 @@
 //! ```
 
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -73,6 +74,29 @@ impl Config {
 
     pub fn find_template(&self, name: &str) -> Option<&TemplateEntry> {
         self.templates.iter().find(|entry| entry.name == name)
+    }
+
+    pub fn merged_palette_paths(
+        &self,
+        config_base_dir: &Path,
+        cli_palettes: &[PathBuf],
+    ) -> Vec<PathBuf> {
+        let mut merged = Vec::new();
+        let mut seen = HashSet::new();
+
+        let config_paths = self
+            .general
+            .palettes
+            .iter()
+            .map(|path| resolve_path(config_base_dir, path));
+
+        for path in config_paths.chain(cli_palettes.iter().cloned()) {
+            if seen.insert(path.clone()) {
+                merged.push(path);
+            }
+        }
+
+        merged
     }
 }
 
@@ -232,5 +256,34 @@ keep_top_k = 3
     #[test]
     fn default_path_suffix_is_stable() {
         assert!(Config::default_path().ends_with(Path::new("chrox/config.toml")));
+    }
+
+    #[test]
+    fn merged_palette_paths_resolve_relative_and_dedup() {
+        let config = Config::from_str(
+            r#"
+[general]
+palettes = ["palettes", "/opt/chrox/palettes"]
+"#,
+        )
+        .expect("config should parse");
+
+        let merged = config.merged_palette_paths(
+            Path::new("/tmp/chrox"),
+            &[
+                PathBuf::from("/opt/chrox/palettes"),
+                PathBuf::from("extra"),
+                PathBuf::from("extra"),
+            ],
+        );
+
+        assert_eq!(
+            merged,
+            vec![
+                PathBuf::from("/tmp/chrox/palettes"),
+                PathBuf::from("/opt/chrox/palettes"),
+                PathBuf::from("extra"),
+            ]
+        );
     }
 }
