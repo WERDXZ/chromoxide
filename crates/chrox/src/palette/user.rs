@@ -22,11 +22,11 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use chromoxide::{
-    solve, ImageCap, Oklch, PaletteError, PaletteProblem, SlotSpec, WeightedSample, WeightedTerm,
+    ImageCap, Oklch, PaletteError, PaletteProblem, SlotSpec, WeightedSample, WeightedTerm,
 };
 use serde::{Deserialize, Serialize};
 
-use super::{Palette, SolveError};
+use super::{solve_problem, Palette, SolveError};
 use crate::solve_config::{Error as SolveConfigError, PartialSolveConfig};
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -132,19 +132,7 @@ impl Palette for PaletteFile {
         let problem = self
             .clone()
             .build_problem_with_cap(samples, image_cap, global_config)?;
-
-        let solution = solve(&problem).map_err(SolveError::Solver)?;
-
-        let mut out = HashMap::with_capacity(solution.slot_diagnostics.len());
-        for (slot, lch) in solution
-            .slot_diagnostics
-            .iter()
-            .zip(solution.colors_lch.iter().copied())
-        {
-            out.insert(slot.name.clone(), lch);
-        }
-
-        Ok(out)
+        solve_problem(&problem)
     }
 }
 

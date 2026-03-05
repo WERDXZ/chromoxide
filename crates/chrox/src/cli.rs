@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand};
 
 use crate::config::Config;
-use crate::palette::registry::PaletteRegistry;
+use crate::palette::registry::{PaletteRecordRef, PaletteRegistry};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -74,6 +74,22 @@ pub fn run(args: Args) -> Result<(), Error> {
             println!("Configured templates: {}", ctx.config.templates.len());
             print_palette_paths(&ctx.merged_palette_paths);
 
+            let mut builtin_ids = ctx
+                .registry
+                .builtin_palettes()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>();
+            builtin_ids.sort_unstable();
+
+            if builtin_ids.is_empty() {
+                println!("Builtin palettes: none registered");
+            } else {
+                println!("Builtin palettes:");
+                for id in builtin_ids {
+                    println!("  - {id}");
+                }
+            }
+
             let mut user_ids = ctx
                 .registry
                 .user_palettes()
@@ -94,16 +110,22 @@ pub fn run(args: Args) -> Result<(), Error> {
         }
         Some(Commands::Show { id }) => {
             let ctx = load_context(args.config.as_ref(), &args.palettes)?;
-            let record = ctx
-                .registry
-                .user_record(&id)
-                .ok_or(Error::PaletteNotFound { id })?;
-
-            println!("id: {}", record.id);
-            println!("name: {}", record.palette.name);
-            println!("path: {}", record.path.display());
-            println!("slots: {}", record.palette.slots.len());
-            println!("terms: {}", record.palette.terms.len());
+            match ctx.registry.resolve(&id) {
+                Some(PaletteRecordRef::User(record)) => {
+                    println!("source: user");
+                    println!("id: {}", record.id);
+                    println!("name: {}", record.palette.name);
+                    println!("path: {}", record.path.display());
+                    println!("slots: {}", record.palette.slots.len());
+                    println!("terms: {}", record.palette.terms.len());
+                }
+                Some(PaletteRecordRef::Builtin(record)) => {
+                    println!("source: builtin");
+                    println!("id: {}", record.id);
+                    println!("name: {}", record.name);
+                }
+                None => return Err(Error::PaletteNotFound { id }),
+            }
 
             Ok(())
         }
@@ -129,7 +151,11 @@ pub fn run(args: Args) -> Result<(), Error> {
             }
             print_palette_paths(&ctx.merged_palette_paths);
             println!("Configured templates: {}", ctx.config.templates.len());
-            println!("Discovered {} user palettes", ctx.registry.user_palette_count());
+            println!(
+                "Discovered {} user palettes and {} builtin palettes",
+                ctx.registry.user_palette_count(),
+                ctx.registry.builtin_palette_count()
+            );
 
             Ok(())
         }

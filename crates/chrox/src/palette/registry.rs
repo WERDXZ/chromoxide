@@ -1,11 +1,40 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::{user::PaletteFile, Palette};
+use phf::phf_map;
 
-#[derive(Debug, Clone, Default)]
+use super::{builtin, user::PaletteFile, Palette};
+
+pub type BuiltinFactory = fn() -> Box<dyn Palette>;
+
+#[derive(Debug, Clone, Copy)]
+pub struct BuiltinPalette {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub build: BuiltinFactory,
+}
+
+static BUILTIN_PALETTES: phf::Map<&'static str, BuiltinPalette> = phf_map! {
+    "cover-salient" => BuiltinPalette {
+        id: "cover-salient",
+        name: "Cover + Salient",
+        build: builtin::cover_salient,
+    },
+};
+
+#[derive(Debug, Clone)]
 pub struct PaletteRegistry {
+    builtins: &'static phf::Map<&'static str, BuiltinPalette>,
     user: HashMap<String, UserPaletteRecord>,
+}
+
+impl Default for PaletteRegistry {
+    fn default() -> Self {
+        Self {
+            builtins: &BUILTIN_PALETTES,
+            user: HashMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -17,6 +46,7 @@ pub struct UserPaletteRecord {
 
 impl PaletteRegistry {
     pub fn discover(search_paths: &[PathBuf]) -> Result<Self, Error> {
+        let builtins = &BUILTIN_PALETTES;
         let mut palette_files = Vec::new();
         for root in search_paths {
             collect_palette_files(root, &mut palette_files)?;
@@ -33,6 +63,10 @@ impl PaletteRegistry {
             })?;
             let id = palette.id();
 
+            if builtins.contains_key(id.as_str()) {
+                return Err(Error::ConflictsBuiltin { id, path });
+            }
+
             if let Some(existing) = user.get(&id) {
                 return Err(Error::DuplicateId {
                     id,
@@ -44,7 +78,11 @@ impl PaletteRegistry {
             user.insert(id.clone(), UserPaletteRecord { id, path, palette });
         }
 
-        Ok(Self { user })
+        Ok(Self { builtins, user })
+    }
+
+    pub fn builtins(&self) -> &'static phf::Map<&'static str, BuiltinPalette> {
+        self.builtins
     }
 
     pub fn user_palette(&self, id: &str) -> Option<&PaletteFile> {
@@ -59,9 +97,34 @@ impl PaletteRegistry {
         self.user.values()
     }
 
+    pub fn builtin_palettes(&self) -> impl Iterator<Item = &BuiltinPalette> + '_ {
+        self.builtins.values()
+    }
+
+    pub fn builtin_palette(&self, id: &str) -> Option<&BuiltinPalette> {
+        self.builtins.get(id)
+    }
+
     pub fn user_palette_count(&self) -> usize {
         self.user.len()
     }
+
+    pub fn builtin_palette_count(&self) -> usize {
+        self.builtins.len()
+    }
+
+    pub fn resolve(&self, id: &str) -> Option<PaletteRecordRef<'_>> {
+        if let Some(user) = self.user_record(id) {
+            return Some(PaletteRecordRef::User(user));
+        }
+        self.builtin_palette(id).map(PaletteRecordRef::Builtin)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum PaletteRecordRef<'a> {
+    User(&'a UserPaletteRecord),
+    Builtin(&'a BuiltinPalette),
 }
 
 fn collect_palette_files(root: &Path, out: &mut Vec<PathBuf>) -> Result<(), Error> {
@@ -139,6 +202,8 @@ pub enum Error {
         first: PathBuf,
         second: PathBuf,
     },
+    #[error("user palette `{id}` in `{path}` conflicts with builtin palette id")]
+    ConflictsBuiltin { id: String, path: PathBuf },
 }
 
 #[cfg(test)]
@@ -190,6 +255,7 @@ name = "Two"
             PaletteRegistry::discover(std::slice::from_ref(&root)).expect("discovery should work");
 
         assert_eq!(registry.user_palette_count(), 2);
+        assert!(registry.builtin_palette("cover-salient").is_some());
         assert!(registry.user_palette("one").is_some());
         assert!(registry.user_palette("two").is_some());
 
@@ -228,6 +294,29 @@ name = "shared"
 
         let _ = std::fs::remove_file(first);
         let _ = std::fs::remove_file(second);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn user_palette_cannot_shadow_builtin() {
+        let root = unique_temp_dir();
+        std::fs::create_dir_all(&root).expect("test directory should be created");
+
+        let path = root.join("builtin-shadow.toml");
+        std::fs::write(
+            &path,
+            r#"
+id = "cover-salient"
+name = "Shadow"
+"#,
+        )
+        .expect("palette should be written");
+
+        let err = PaletteRegistry::discover(std::slice::from_ref(&root))
+            .expect_err("builtin id shadowing should fail");
+        assert!(matches!(err, Error::ConflictsBuiltin { id, .. } if id == "cover-salient"));
+
+        let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_dir_all(root);
     }
 }
