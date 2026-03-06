@@ -7,7 +7,7 @@ use crate::util::{pseudo_huber, relu};
 /// Evaluates contrast term.
 pub fn evaluate(term: &ContrastTerm, ctx: &EvalContext<'_>) -> TermEvaluation {
     let cr = contrast_ratio(ctx.luminance[term.fg], ctx.luminance[term.bg]);
-    let raw = pseudo_huber(relu(term.min_ratio - cr), 0.25);
+    let raw = pseudo_huber(relu(term.min_ratio - cr), term.hinge_delta.unwrap_or(0.25));
     TermEvaluation {
         raw,
         components: vec![cr],

@@ -3,7 +3,8 @@
 //! `chromoxide` solves for a palette of slot colors under:
 //! - slot-wise hard domains (`SlotDomain`)
 //! - image evidence terms (`Cover`, `Support`, `Saliency`)
-//! - pairwise terms (`DeltaL`, `DeltaC`, `DeltaH`, `Order`, `Contrast`)
+//! - unary target terms (`LightnessTarget`, `ChromaTarget`, `HueTarget`)
+//! - pairwise terms (`DeltaL`, `DeltaC`, `DeltaH`, `Distance`, `Order`, `Contrast`)
 //! - group terms (`GroupQuantile`)
 //!
 //! Optimization is continuous in Oklab/OkLCh using multi-start L-BFGS.
@@ -103,8 +104,9 @@ pub use problem::{GradientMode, PaletteProblem, SlotSpec, SolveConfig};
 pub use solver::{solve, solve_with_rng};
 pub use support::WeightedSample;
 pub use term::{
-    ContrastTerm, CoverTerm, DeltaCTarget, DeltaHTarget, DeltaLTarget, GroupAxis, GroupMember,
-    GroupQuantileTerm, GroupTarget, Monotonicity, OrderRelation, PairDeltaCTerm, PairDeltaHTerm,
-    PairDeltaLTerm, PairOrderTerm, QuantileKnot, SaliencyTarget, SaliencyTerm, SupportTerm, Term,
-    WeightedTerm,
+    ChromaTargetTerm, ContrastTerm, CoverTerm, DeltaCTarget, DeltaHTarget, DeltaLTarget,
+    GroupAxis, GroupMember, GroupQuantileTerm, GroupTarget, HueTargetTerm, HueUnaryTarget,
+    LightnessTargetTerm, Monotonicity, OrderRelation, PairDeltaCTerm, PairDeltaHTerm,
+    PairDeltaLTerm, PairDistanceTerm, PairOrderTerm, QuantileKnot, SaliencyTarget,
+    SaliencyTerm, ScalarTarget, SupportTerm, Term, WeightedTerm,
 };

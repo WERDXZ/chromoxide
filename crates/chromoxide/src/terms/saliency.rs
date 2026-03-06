@@ -2,7 +2,7 @@
 
 use crate::color::Oklab;
 use crate::term::{EvalContext, SaliencyTarget, SaliencyTerm, TermEvaluation};
-use crate::util::{EPS, pseudo_huber, relu};
+use crate::util::{pseudo_huber, relu, EPS};
 
 /// Estimates saliency at a color by RBF kernel regression.
 pub fn estimate_saliency_at(
@@ -38,11 +38,13 @@ pub fn evaluate(term: &SaliencyTerm, ctx: &EvalContext<'_>) -> TermEvaluation {
         ctx.samples,
         term.sigma.max(1.0e-6),
     );
+    let hinge_delta = term.hinge_delta.unwrap_or(0.05);
     let raw = match term.target {
-        SaliencyTarget::Min(v) => pseudo_huber(relu(v - saliency), 0.05),
-        SaliencyTarget::Max(v) => pseudo_huber(relu(saliency - v), 0.05),
+        SaliencyTarget::Min(v) => pseudo_huber(relu(v - saliency), hinge_delta),
+        SaliencyTarget::Max(v) => pseudo_huber(relu(saliency - v), hinge_delta),
         SaliencyTarget::Range { min, max } => {
-            pseudo_huber(relu(min - saliency), 0.05) + pseudo_huber(relu(saliency - max), 0.05)
+            pseudo_huber(relu(min - saliency), hinge_delta)
+                + pseudo_huber(relu(saliency - max), hinge_delta)
         }
         SaliencyTarget::Target { value, delta } => {
             pseudo_huber(saliency - value, delta.max(1.0e-4))

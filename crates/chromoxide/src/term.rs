@@ -108,6 +108,27 @@ pub struct SaliencyTerm {
     pub sigma: f64,
     /// Target type.
     pub target: SaliencyTarget,
+    /// Optional pseudo-Huber delta used only for hinge-style targets.
+    ///
+    /// This affects `Min`, `Max`, and `Range`, but does not affect
+    /// `Target { value, delta }`.
+    pub hinge_delta: Option<f64>,
+}
+
+/// Reusable scalar target shape for unary and distance terms.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug)]
+pub enum ScalarTarget {
+    /// Minimum allowed value.
+    Min(f64),
+    /// Maximum allowed value.
+    Max(f64),
+    /// Inclusive target range.
+    Range { min: f64, max: f64 },
+    /// Point target with pseudo-Huber delta.
+    ///
+    /// Unlike hinge-style targets, this uses the embedded `delta` directly.
+    Target { value: f64, delta: f64 },
 }
 
 /// Delta-L target.
@@ -190,6 +211,11 @@ pub struct PairDeltaLTerm {
     pub b: usize,
     /// Target on absolute difference.
     pub target: DeltaLTarget,
+    /// Optional pseudo-Huber delta used only for hinge-style targets.
+    ///
+    /// This affects `Min`, `Max`, and `Range`, but does not affect
+    /// `Target { value, delta }`.
+    pub hinge_delta: Option<f64>,
 }
 
 /// Pairwise chroma difference term.
@@ -202,6 +228,11 @@ pub struct PairDeltaCTerm {
     pub b: usize,
     /// Target on absolute difference.
     pub target: DeltaCTarget,
+    /// Optional pseudo-Huber delta used only for hinge-style targets.
+    ///
+    /// This affects `Min`, `Max`, and `Range`, but does not affect
+    /// `Target { value, delta }`.
+    pub hinge_delta: Option<f64>,
 }
 
 /// Pairwise hue difference term.
@@ -214,6 +245,97 @@ pub struct PairDeltaHTerm {
     pub b: usize,
     /// Target on circular hue difference (radians).
     pub target: DeltaHTarget,
+    /// Optional pseudo-Huber delta used only for hinge-style targets.
+    ///
+    /// This affects `Min`, `Max`, and `Range`, but does not affect
+    /// `Target { value, delta }`.
+    pub hinge_delta: Option<f64>,
+}
+
+/// Absolute lightness preference for a single slot.
+///
+/// This is useful for soft anchors such as keeping a background dark,
+/// keeping text light, or nudging a slot toward a preferred lightness band.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug)]
+pub struct LightnessTargetTerm {
+    /// Slot index.
+    pub slot: usize,
+    /// Scalar target applied to `slots_lch[slot].l`.
+    pub target: ScalarTarget,
+    /// Optional pseudo-Huber delta used only for hinge-style targets.
+    ///
+    /// This affects `Min`, `Max`, and `Range`, but does not affect
+    /// `Target { value, delta }`.
+    pub hinge_delta: Option<f64>,
+}
+
+/// Absolute chroma preference for a single slot.
+///
+/// This is useful for soft neutral anchors, accent minimum-chroma preferences,
+/// or keeping a slot inside a preferred chroma band.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug)]
+pub struct ChromaTargetTerm {
+    /// Slot index.
+    pub slot: usize,
+    /// Scalar target applied to `slots_lch[slot].c`.
+    pub target: ScalarTarget,
+    /// Optional pseudo-Huber delta used only for hinge-style targets.
+    ///
+    /// This affects `Min`, `Max`, and `Range`, but does not affect
+    /// `Target { value, delta }`.
+    pub hinge_delta: Option<f64>,
+}
+
+/// Unary hue target for a single slot.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug)]
+pub enum HueUnaryTarget {
+    /// Soft preference for a single absolute hue center in radians.
+    Target { center: f64, delta: f64 },
+    /// Soft preference for staying anywhere on a counter-clockwise arc.
+    ArcPreference { start: f64, end: f64, delta: f64 },
+}
+
+/// Absolute hue preference for a single slot.
+///
+/// This term applies a unary preference to one slot's absolute hue. Unlike
+/// [`PairDeltaHTerm`], it does not describe a relation between two slots.
+/// Use it when a slot should stay near a specific hue or within a preferred hue
+/// arc, while still remaining soft and optimizer-friendly.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug)]
+pub struct HueTargetTerm {
+    /// Slot index.
+    pub slot: usize,
+    /// Unary hue target definition.
+    pub target: HueUnaryTarget,
+    /// Whether to multiply the penalty by this slot's hue gate.
+    pub use_hue_gate: bool,
+}
+
+/// Pairwise Oklab distance preference between two slots.
+///
+/// This term constrains full geometric distance in Oklab, rather than only one
+/// axis. Unlike [`PairDeltaLTerm`], [`PairDeltaCTerm`], or [`PairDeltaHTerm`],
+/// it measures the combined Euclidean separation between two colors.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug)]
+pub struct PairDistanceTerm {
+    /// Slot A.
+    pub a: usize,
+    /// Slot B.
+    pub b: usize,
+    /// Target applied to Oklab distance or squared distance.
+    pub target: ScalarTarget,
+    /// Whether to operate on squared Oklab distance.
+    pub squared: bool,
+    /// Optional pseudo-Huber delta used only for hinge-style targets.
+    ///
+    /// This affects `Min`, `Max`, and `Range`, but does not affect
+    /// `Target { value, delta }`.
+    pub hinge_delta: Option<f64>,
 }
 
 /// Pairwise lightness order relation.
@@ -236,6 +358,8 @@ pub struct PairOrderTerm {
     pub b: usize,
     /// Order relation.
     pub relation: OrderRelation,
+    /// Optional pseudo-Huber delta used for the hinge-style order penalty.
+    pub hinge_delta: Option<f64>,
 }
 
 /// Contrast term (foreground/background).
@@ -248,6 +372,8 @@ pub struct ContrastTerm {
     pub bg: usize,
     /// Minimum contrast ratio.
     pub min_ratio: f64,
+    /// Optional pseudo-Huber delta used for the hinge-style contrast penalty.
+    pub hinge_delta: Option<f64>,
 }
 
 /// Group axis.
@@ -343,12 +469,20 @@ pub enum Term {
     Support(SupportTerm),
     /// Saliency term.
     Saliency(SaliencyTerm),
+    /// Unary lightness target term.
+    LightnessTarget(LightnessTargetTerm),
+    /// Unary chroma target term.
+    ChromaTarget(ChromaTargetTerm),
+    /// Unary hue target term.
+    HueTarget(HueTargetTerm),
     /// Pair delta-L term.
     DeltaL(PairDeltaLTerm),
     /// Pair delta-C term.
     DeltaC(PairDeltaCTerm),
     /// Pair delta-h term.
     DeltaH(PairDeltaHTerm),
+    /// Pair Oklab distance term.
+    Distance(PairDistanceTerm),
     /// Pair order term.
     Order(PairOrderTerm),
     /// Contrast term.
@@ -364,9 +498,13 @@ impl Term {
             Term::Cover(t) => crate::terms::cover::evaluate(t, ctx),
             Term::Support(t) => crate::terms::support::evaluate(t, ctx),
             Term::Saliency(t) => crate::terms::saliency::evaluate(t, ctx),
+            Term::LightnessTarget(t) => crate::terms::lightness_target::evaluate(t, ctx),
+            Term::ChromaTarget(t) => crate::terms::chroma_target::evaluate(t, ctx),
+            Term::HueTarget(t) => crate::terms::hue_target::evaluate(t, ctx),
             Term::DeltaL(t) => crate::terms::pair_delta::evaluate_delta_l(t, ctx),
             Term::DeltaC(t) => crate::terms::pair_delta::evaluate_delta_c(t, ctx),
             Term::DeltaH(t) => crate::terms::pair_delta::evaluate_delta_h(t, ctx),
+            Term::Distance(t) => crate::terms::pair_distance::evaluate(t, ctx),
             Term::Order(t) => crate::terms::pair_order::evaluate(t, ctx),
             Term::Contrast(t) => crate::terms::contrast::evaluate(t, ctx),
             Term::GroupQuantile(t) => crate::terms::group_quantile::evaluate(t, ctx),
@@ -379,9 +517,13 @@ impl Term {
             Term::Cover(_) => "cover",
             Term::Support(_) => "support",
             Term::Saliency(_) => "saliency",
+            Term::LightnessTarget(_) => "lightness_target",
+            Term::ChromaTarget(_) => "chroma_target",
+            Term::HueTarget(_) => "hue_target",
             Term::DeltaL(_) => "delta_l",
             Term::DeltaC(_) => "delta_c",
             Term::DeltaH(_) => "delta_h",
+            Term::Distance(_) => "distance",
             Term::Order(_) => "order",
             Term::Contrast(_) => "contrast",
             Term::GroupQuantile(_) => "group_quantile",

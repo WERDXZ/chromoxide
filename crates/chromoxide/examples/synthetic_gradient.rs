@@ -1,9 +1,10 @@
 use std::num::{NonZeroU64, NonZeroUsize};
 
 use chromoxide::{
-    CapPolicy, ContrastTerm, CoverTerm, GradientMode, GroupAxis, GroupMember, GroupQuantileTerm,
-    GroupTarget, HueDomain, Interval, Monotonicity, OrderRelation, PairOrderTerm, PaletteProblem,
-    SlotDomain, SlotSpec, SolveConfig, Term, WeightedSample, WeightedTerm, solve,
+    solve, CapPolicy, ContrastTerm, CoverTerm, GradientMode, GroupAxis, GroupMember,
+    GroupQuantileTerm, GroupTarget, HueDomain, Interval, Monotonicity, OrderRelation,
+    PairOrderTerm, PaletteProblem, SlotDomain, SlotSpec, SolveConfig, Term, WeightedSample,
+    WeightedTerm,
 };
 
 fn main() {
@@ -120,6 +121,7 @@ fn main() {
                 fg: 2,
                 bg: 0,
                 min_ratio: 4.5,
+                hinge_delta: None,
             }),
         },
         WeightedTerm {
@@ -129,6 +131,7 @@ fn main() {
                 a: 2,
                 b: 0,
                 relation: OrderRelation::BrighterBy { delta: 0.25 },
+                hinge_delta: None,
             }),
         },
     ];

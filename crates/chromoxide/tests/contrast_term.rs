@@ -35,6 +35,7 @@ fn contrast_term_behaves_as_expected() {
         fg: 1,
         bg: 0,
         min_ratio: 4.5,
+        hinge_delta: None,
     };
     let bw_loss = eval_contrast(&term, &bw_ctx).raw;
     assert!(bw_loss < 1.0e-6);
@@ -91,6 +92,7 @@ fn hue_gate_suppresses_delta_h_at_low_chroma() {
             value: std::f64::consts::FRAC_PI_2,
             delta: 0.1,
         },
+        hinge_delta: None,
     };
 
     let full_ctx = EvalContext {

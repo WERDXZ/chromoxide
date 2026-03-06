@@ -183,6 +183,53 @@ fn validate_slot_index(idx: usize, n_slots: usize, field: &str) -> Result<(), Pa
     Ok(())
 }
 
+fn validate_positive_finite(value: f64, field: &str) -> Result<(), PaletteError> {
+    if !value.is_finite() || value <= 0.0 {
+        return Err(PaletteError::InvalidProblem(format!(
+            "{field} must be finite and > 0"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_hinge_delta(hinge_delta: Option<f64>, field: &str) -> Result<(), PaletteError> {
+    if let Some(delta) = hinge_delta {
+        validate_positive_finite(delta, field)?;
+    }
+    Ok(())
+}
+
+fn validate_scalar_target(
+    target: &crate::term::ScalarTarget,
+    field: &str,
+) -> Result<(), PaletteError> {
+    match *target {
+        crate::term::ScalarTarget::Min(v) | crate::term::ScalarTarget::Max(v) => {
+            if !v.is_finite() {
+                return Err(PaletteError::InvalidProblem(format!(
+                    "{field} bound must be finite"
+                )));
+            }
+        }
+        crate::term::ScalarTarget::Range { min, max } => {
+            if !min.is_finite() || !max.is_finite() || min > max {
+                return Err(PaletteError::InvalidProblem(format!(
+                    "{field} range must be finite and satisfy min <= max"
+                )));
+            }
+        }
+        crate::term::ScalarTarget::Target { value, delta } => {
+            if !value.is_finite() {
+                return Err(PaletteError::InvalidProblem(format!(
+                    "{field} value must be finite"
+                )));
+            }
+            validate_positive_finite(delta, &format!("{field}.delta"))?;
+        }
+    }
+    Ok(())
+}
+
 /// Validates a single term payload against global problem shape/rules.
 fn validate_term(term: &Term, n_slots: usize) -> Result<(), PaletteError> {
     match term {
@@ -208,31 +255,71 @@ fn validate_term(term: &Term, n_slots: usize) -> Result<(), PaletteError> {
         }
         Term::Saliency(t) => {
             validate_slot_index(t.slot, n_slots, "SaliencyTerm.slot")?;
+            validate_positive_finite(t.sigma, "SaliencyTerm.sigma")?;
+            validate_hinge_delta(t.hinge_delta, "SaliencyTerm.hinge_delta")?;
+        }
+        Term::LightnessTarget(t) => {
+            validate_slot_index(t.slot, n_slots, "LightnessTargetTerm.slot")?;
+            validate_scalar_target(&t.target, "LightnessTargetTerm.target")?;
+            validate_hinge_delta(t.hinge_delta, "LightnessTargetTerm.hinge_delta")?;
+        }
+        Term::ChromaTarget(t) => {
+            validate_slot_index(t.slot, n_slots, "ChromaTargetTerm.slot")?;
+            validate_scalar_target(&t.target, "ChromaTargetTerm.target")?;
+            validate_hinge_delta(t.hinge_delta, "ChromaTargetTerm.hinge_delta")?;
+        }
+        Term::HueTarget(t) => {
+            validate_slot_index(t.slot, n_slots, "HueTargetTerm.slot")?;
+            match &t.target {
+                crate::term::HueUnaryTarget::Target { center, delta } => {
+                    if !center.is_finite() {
+                        return Err(PaletteError::InvalidProblem(
+                            "HueTargetTerm.target.center must be finite".to_string(),
+                        ));
+                    }
+                    validate_positive_finite(*delta, "HueTargetTerm.target.delta")?;
+                }
+                crate::term::HueUnaryTarget::ArcPreference { start, end, delta } => {
+                    if !start.is_finite() || !end.is_finite() {
+                        return Err(PaletteError::InvalidProblem(
+                            "HueTargetTerm arc endpoints must be finite".to_string(),
+                        ));
+                    }
+                    validate_positive_finite(*delta, "HueTargetTerm.target.delta")?;
+                }
+            }
         }
         Term::DeltaL(t) => {
             validate_slot_index(t.a, n_slots, "PairDeltaLTerm.a")?;
             validate_slot_index(t.b, n_slots, "PairDeltaLTerm.b")?;
+            validate_hinge_delta(t.hinge_delta, "PairDeltaLTerm.hinge_delta")?;
         }
         Term::DeltaC(t) => {
             validate_slot_index(t.a, n_slots, "PairDeltaCTerm.a")?;
             validate_slot_index(t.b, n_slots, "PairDeltaCTerm.b")?;
+            validate_hinge_delta(t.hinge_delta, "PairDeltaCTerm.hinge_delta")?;
         }
         Term::DeltaH(t) => {
             validate_slot_index(t.a, n_slots, "PairDeltaHTerm.a")?;
             validate_slot_index(t.b, n_slots, "PairDeltaHTerm.b")?;
+            validate_hinge_delta(t.hinge_delta, "PairDeltaHTerm.hinge_delta")?;
+        }
+        Term::Distance(t) => {
+            validate_slot_index(t.a, n_slots, "PairDistanceTerm.a")?;
+            validate_slot_index(t.b, n_slots, "PairDistanceTerm.b")?;
+            validate_scalar_target(&t.target, "PairDistanceTerm.target")?;
+            validate_hinge_delta(t.hinge_delta, "PairDistanceTerm.hinge_delta")?;
         }
         Term::Order(t) => {
             validate_slot_index(t.a, n_slots, "PairOrderTerm.a")?;
             validate_slot_index(t.b, n_slots, "PairOrderTerm.b")?;
+            validate_hinge_delta(t.hinge_delta, "PairOrderTerm.hinge_delta")?;
         }
         Term::Contrast(t) => {
             validate_slot_index(t.fg, n_slots, "ContrastTerm.fg")?;
             validate_slot_index(t.bg, n_slots, "ContrastTerm.bg")?;
-            if !t.min_ratio.is_finite() || t.min_ratio <= 0.0 {
-                return Err(PaletteError::InvalidProblem(
-                    "ContrastTerm.min_ratio must be finite and > 0".to_string(),
-                ));
-            }
+            validate_positive_finite(t.min_ratio, "ContrastTerm.min_ratio")?;
+            validate_hinge_delta(t.hinge_delta, "ContrastTerm.hinge_delta")?;
         }
         Term::GroupQuantile(t) => {
             if t.members.is_empty() {
