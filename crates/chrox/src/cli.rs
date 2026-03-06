@@ -274,7 +274,7 @@ fn format_palette_output(
             slot: slot.as_str(),
             hex: filter::apply("hex", *color).expect("hex filter should exist"),
             oklch: filter::apply("oklch", *color).expect("oklch filter should exist"),
-            preview: color_preview(*color, slot),
+            preview: color_preview(*color, preview_label(slot)),
         })
         .collect::<Vec<_>>();
 
@@ -297,27 +297,19 @@ fn format_palette_output(
         .unwrap_or(5)
         .max("oklch".len());
 
-    let border = format!(
-        "+-{:-<slot_width$}-+-{:-<hex_width$}-+-{:-<oklch_width$}-+---------+\n",
-        "", "", ""
-    );
-
     let mut out = String::new();
     out.push_str(&format!("palette: {id}\n"));
     out.push_str(&format!("name:    {name}\n"));
-    out.push_str(&border);
     out.push_str(&format!(
-        "| {:<slot_width$} | {:<hex_width$} | {:<oklch_width$} | preview |\n",
-        "slot", "hex", "oklch"
+        "{: <slot_width$}\t{: <hex_width$}\t{: <oklch_width$}\t{}\n",
+        "slot", "hex", "oklch", "preview"
     ));
-    out.push_str(&border);
     for row in rows {
         out.push_str(&format!(
-            "| {:<slot_width$} | {:<hex_width$} | {:<oklch_width$} | {} |\n",
+            "{: <slot_width$}\t{: <hex_width$}\t{: <oklch_width$}\t{}\n",
             row.slot, row.hex, row.oklch, row.preview
         ));
     }
-    out.push_str(&border);
     out
 }
 
@@ -332,9 +324,18 @@ fn color_preview(color: chromoxide::Oklch, label: &str) -> String {
     let (bg_r, bg_g, bg_b) = srgb_u8(color);
     let (fg_r, fg_g, fg_b) = readable_text_rgb(color);
     format!(
-        "\x1b[48;2;{bg_r};{bg_g};{bg_b}m\x1b[38;2;{fg_r};{fg_g};{fg_b}m {:<7} \x1b[0m",
+        "\x1b[48;2;{bg_r};{bg_g};{bg_b}m\x1b[38;2;{fg_r};{fg_g};{fg_b}m {:<4} \x1b[0m",
         label
     )
+}
+
+fn preview_label(slot: &str) -> &str {
+    match slot {
+        "cover" => "cvr",
+        "salient-1" => "s1",
+        "salient-2" => "s2",
+        _ => slot,
+    }
 }
 
 fn srgb_u8(color: chromoxide::Oklch) -> (u8, u8, u8) {
@@ -640,12 +641,13 @@ palettes = ["palettes"]
 
         assert_eq!(lines[0], "palette: cover-salient");
         assert_eq!(lines[1], "name:    Cover + Salient");
-        assert!(lines[2].starts_with("+-"));
-        assert!(lines[3].contains("| slot"));
-        assert!(lines[5].contains("| cover"));
-        assert!(lines[5].contains("| #"));
-        assert!(lines[5].contains("| oklch("));
-        assert!(lines[5].contains("\x1b[48;2;"));
-        assert!(lines[6].contains("| salient"));
+        assert!(lines[2].starts_with("slot"));
+        assert!(lines[2].contains("\thex"));
+        assert!(lines[3].starts_with("cover"));
+        assert!(lines[3].contains("\t#"));
+        assert!(lines[3].contains("\toklch("));
+        assert!(lines[3].contains("\x1b[48;2;"));
+        assert!(lines[3].contains("cvr"));
+        assert!(lines[4].starts_with("salient"));
     }
 }
