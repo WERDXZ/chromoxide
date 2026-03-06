@@ -1,10 +1,18 @@
 //! Argument parsing and command dispatch.
 
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
+use chromoxide::convert::{oklab_to_linear_srgb, relative_luminance};
+use chromoxide_image::{
+    CapConfig, FarthestPointLabConfig, ImagePipelineConfig, LocalContrastConfig,
+    SamplingConfig, SamplingMethod, SaliencyConfig, SaliencyMethod, prepare_support_from_path,
+};
 
 use crate::config::Config;
+use crate::filter;
+use crate::palette::Palette;
 use crate::palette::registry::{PaletteRecordRef, PaletteRegistry};
 
 #[derive(Debug, thiserror::Error)]
@@ -23,6 +31,14 @@ pub enum Error {
     PaletteDiscovery(#[source] Box<crate::palette::registry::Error>),
     #[error("palette not found: {id}")]
     PaletteNotFound { id: String },
+    #[error("failed to prepare image support")]
+    ImageSupport(#[from] chromoxide_image::ImagePipelineError),
+    #[error("failed to solve palette `{id}`")]
+    PaletteSolve {
+        id: String,
+        #[source]
+        source: Box<crate::palette::SolveError>,
+    },
 }
 
 impl From<crate::palette::registry::Error> for Error {
@@ -63,6 +79,16 @@ enum Commands {
     Show {
         /// Identifier (e.g. ansi_light, base16_dark, ...)
         id: String,
+    },
+
+    /// Solve one or more palettes against an image and print to stdout
+    Test {
+        /// Palette ids to solve in order
+        #[arg(value_name = "PALETTE", required = true, num_args = 1..)]
+        palette_ids: Vec<String>,
+        /// Image to process; pass after `--`
+        #[arg(value_name = "IMAGE", last = true)]
+        image: PathBuf,
     },
 }
 
@@ -129,6 +155,61 @@ pub fn run(args: Args) -> Result<(), Error> {
 
             Ok(())
         }
+        Some(Commands::Test { palette_ids, image }) => {
+            if !image.exists() {
+                return Err(Error::ImageNotFound { path: image });
+            }
+
+            let ctx = load_context(args.config.as_ref(), &args.palettes)?;
+            let support = prepare_support_from_path(&image, &default_test_pipeline_config())?;
+
+            for (idx, palette_id) in palette_ids.iter().enumerate() {
+                let record = ctx
+                    .registry
+                    .resolve(palette_id)
+                    .ok_or_else(|| Error::PaletteNotFound {
+                        id: palette_id.clone(),
+                    })?;
+
+                let rendered = match record {
+                    PaletteRecordRef::User(record) => {
+                        let colors = record
+                            .palette
+                            .solve(
+                                support.samples.clone(),
+                                support.image_cap.clone(),
+                                &ctx.config.config,
+                            )
+                            .map_err(|source| Error::PaletteSolve {
+                                id: record.id.clone(),
+                                source: Box::new(source),
+                            })?;
+                        format_palette_output(&record.id, &record.palette.name, &colors)
+                    }
+                    PaletteRecordRef::Builtin(record) => {
+                        let palette = (record.build)();
+                        let colors = palette
+                            .solve(
+                                support.samples.clone(),
+                                support.image_cap.clone(),
+                                &ctx.config.config,
+                            )
+                            .map_err(|source| Error::PaletteSolve {
+                                id: record.id.to_string(),
+                                source: Box::new(source),
+                            })?;
+                        format_palette_output(record.id, record.name, &colors)
+                    }
+                };
+
+                if idx > 0 {
+                    println!();
+                }
+                print!("{rendered}");
+            }
+
+            Ok(())
+        }
         None => {
             // Render mode (config/template-driven palette inference)
             let image_path = args.image.ok_or(Error::MissingImage)?;
@@ -160,6 +241,136 @@ pub fn run(args: Args) -> Result<(), Error> {
             Ok(())
         }
     }
+}
+
+fn default_test_pipeline_config() -> ImagePipelineConfig {
+    ImagePipelineConfig {
+        saliency: SaliencyConfig {
+            method: SaliencyMethod::LocalContrast(LocalContrastConfig::default()),
+        },
+        sampling: SamplingConfig {
+            method: SamplingMethod::FarthestPointLab(FarthestPointLabConfig {
+                count: NonZeroUsize::new(24).expect("24 is non-zero"),
+                candidate_stride: NonZeroU32::new(2).expect("2 is non-zero"),
+                saliency_bias: 0.35,
+            }),
+        },
+        cap: Some(CapConfig::default()),
+        ..Default::default()
+    }
+}
+
+fn format_palette_output(
+    id: &str,
+    name: &str,
+    colors: &std::collections::HashMap<String, chromoxide::Oklch>,
+) -> String {
+    let mut entries = colors.iter().collect::<Vec<_>>();
+    entries.sort_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
+
+    let rows = entries
+        .into_iter()
+        .map(|(slot, color)| PaletteRow {
+            slot: slot.as_str(),
+            hex: filter::apply("hex", *color).expect("hex filter should exist"),
+            oklch: filter::apply("oklch", *color).expect("oklch filter should exist"),
+            preview: color_preview(*color, slot),
+        })
+        .collect::<Vec<_>>();
+
+    let slot_width = rows
+        .iter()
+        .map(|row| row.slot.len())
+        .max()
+        .unwrap_or(4)
+        .max("slot".len());
+    let hex_width = rows
+        .iter()
+        .map(|row| row.hex.len())
+        .max()
+        .unwrap_or(4)
+        .max("hex".len());
+    let oklch_width = rows
+        .iter()
+        .map(|row| row.oklch.len())
+        .max()
+        .unwrap_or(5)
+        .max("oklch".len());
+
+    let border = format!(
+        "+-{:-<slot_width$}-+-{:-<hex_width$}-+-{:-<oklch_width$}-+---------+\n",
+        "", "", ""
+    );
+
+    let mut out = String::new();
+    out.push_str(&format!("palette: {id}\n"));
+    out.push_str(&format!("name:    {name}\n"));
+    out.push_str(&border);
+    out.push_str(&format!(
+        "| {:<slot_width$} | {:<hex_width$} | {:<oklch_width$} | preview |\n",
+        "slot", "hex", "oklch"
+    ));
+    out.push_str(&border);
+    for row in rows {
+        out.push_str(&format!(
+            "| {:<slot_width$} | {:<hex_width$} | {:<oklch_width$} | {} |\n",
+            row.slot, row.hex, row.oklch, row.preview
+        ));
+    }
+    out.push_str(&border);
+    out
+}
+
+struct PaletteRow<'a> {
+    slot: &'a str,
+    hex: String,
+    oklch: String,
+    preview: String,
+}
+
+fn color_preview(color: chromoxide::Oklch, label: &str) -> String {
+    let (bg_r, bg_g, bg_b) = srgb_u8(color);
+    let (fg_r, fg_g, fg_b) = readable_text_rgb(color);
+    format!(
+        "\x1b[48;2;{bg_r};{bg_g};{bg_b}m\x1b[38;2;{fg_r};{fg_g};{fg_b}m {:<7} \x1b[0m",
+        label
+    )
+}
+
+fn srgb_u8(color: chromoxide::Oklch) -> (u8, u8, u8) {
+    let linear = oklab_to_linear_srgb(color.to_oklab());
+    (
+        to_srgb_u8(linear.r),
+        to_srgb_u8(linear.g),
+        to_srgb_u8(linear.b),
+    )
+}
+
+fn readable_text_rgb(color: chromoxide::Oklch) -> (u8, u8, u8) {
+    let linear = oklab_to_linear_srgb(color.to_oklab());
+    let bg_luma = relative_luminance(linear);
+    let contrast_with_black = contrast_ratio(bg_luma, 0.0);
+    let contrast_with_white = contrast_ratio(bg_luma, 1.0);
+    if contrast_with_black >= contrast_with_white {
+        (0, 0, 0)
+    } else {
+        (255, 255, 255)
+    }
+}
+
+fn contrast_ratio(a: f64, b: f64) -> f64 {
+    let lighter = a.max(b);
+    let darker = a.min(b);
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+fn to_srgb_u8(channel: f64) -> u8 {
+    let srgb = if channel <= 0.003_130_8 {
+        12.92 * channel
+    } else {
+        1.055 * channel.powf(1.0 / 2.4) - 0.055
+    };
+    (srgb.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 #[derive(Debug)]
@@ -232,12 +443,14 @@ fn print_palette_paths(paths: &[PathBuf]) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use chromoxide::Oklch;
     use clap::Parser;
 
-    use super::{Args, Commands, Error, config_base_dir, run};
+    use super::{Args, Commands, Error, config_base_dir, format_palette_output, run};
 
     fn unique_temp_dir() -> PathBuf {
         let nanos = SystemTime::now()
@@ -281,6 +494,20 @@ mod tests {
         assert!(matches!(args.command, Some(Commands::List)));
         assert_eq!(args.config, Some(PathBuf::from("cfg.toml")));
         assert_eq!(args.palettes, vec![PathBuf::from("a"), PathBuf::from("b")]);
+    }
+
+    #[test]
+    fn test_subcommand_parses_palettes_and_image_after_double_dash() {
+        let args = Args::try_parse_from(["chrox", "test", "cover-salient", "base16", "--", "wall.png"])
+            .expect("args should parse");
+
+        match args.command {
+            Some(Commands::Test { palette_ids, image }) => {
+                assert_eq!(palette_ids, vec!["cover-salient", "base16"]);
+                assert_eq!(image, PathBuf::from("wall.png"));
+            }
+            other => panic!("expected test command, got {other:?}"),
+        }
     }
 
     #[test]
@@ -386,5 +613,39 @@ palettes = ["palettes"]
 
         let _ = std::fs::remove_file(config_path);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn format_palette_output_sorts_slots_and_includes_color_formats() {
+        let mut colors = HashMap::new();
+        colors.insert(
+            "salient".to_string(),
+            Oklch {
+                l: 0.7,
+                c: 0.14,
+                h: 0.8,
+            },
+        );
+        colors.insert(
+            "cover".to_string(),
+            Oklch {
+                l: 0.4,
+                c: 0.02,
+                h: 0.2,
+            },
+        );
+
+        let output = format_palette_output("cover-salient", "Cover + Salient", &colors);
+        let lines = output.lines().collect::<Vec<_>>();
+
+        assert_eq!(lines[0], "palette: cover-salient");
+        assert_eq!(lines[1], "name:    Cover + Salient");
+        assert!(lines[2].starts_with("+-"));
+        assert!(lines[3].contains("| slot"));
+        assert!(lines[5].contains("| cover"));
+        assert!(lines[5].contains("| #"));
+        assert!(lines[5].contains("| oklch("));
+        assert!(lines[5].contains("\x1b[48;2;"));
+        assert!(lines[6].contains("| salient"));
     }
 }

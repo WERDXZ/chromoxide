@@ -306,6 +306,7 @@ name = "chrox"
 version = "0.1.0"
 dependencies = [
  "chromoxide",
+ "chromoxide-image",
  "clap",
  "dirs",
  "phf",
