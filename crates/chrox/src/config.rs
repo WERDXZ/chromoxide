@@ -9,21 +9,29 @@
 //! input = "templates/alacritty.toml"
 //! output = ".config/alacritty/colors.toml"
 //!
+//! [image.saliency]
+//! method = { LocalContrast = { blur_radius = 3, color_weight = 1.0, luminance_weight = 1.0, global_mix = 0.2, robust_normalize = true } }
+//!
 //! [config]
 //! seed_count = 24
 //! ```
 
 use std::{
     collections::HashSet,
+    num::{NonZeroU32, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
 };
 
+use chromoxide_image::{
+    CapConfig, FarthestPointLabConfig, ImagePipelineConfig, LocalContrastConfig, SaliencyConfig,
+    SaliencyMethod, SamplingConfig, SamplingMethod,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::solve_config::PartialSolveConfig;
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
     pub general: GeneralConfig,
@@ -31,6 +39,22 @@ pub struct Config {
     pub templates: Vec<TemplateEntry>,
     #[serde(default, alias = "solve")]
     pub config: PartialSolveConfig,
+    #[serde(
+        default = "default_image_config",
+        deserialize_with = "deserialize_image_config"
+    )]
+    pub image: ImagePipelineConfig,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            general: GeneralConfig::default(),
+            templates: Vec::new(),
+            config: PartialSolveConfig::default(),
+            image: default_image_config(),
+        }
+    }
 }
 
 impl FromStr for Config {
@@ -131,6 +155,52 @@ fn resolve_path(base_dir: &Path, path: &Path) -> PathBuf {
     }
 }
 
+pub fn default_image_config() -> ImagePipelineConfig {
+    ImagePipelineConfig {
+        saliency: SaliencyConfig {
+            method: SaliencyMethod::LocalContrast(LocalContrastConfig::default()),
+        },
+        sampling: SamplingConfig {
+            method: SamplingMethod::FarthestPointLab(FarthestPointLabConfig {
+                count: NonZeroUsize::new(24).expect("24 is non-zero"),
+                candidate_stride: NonZeroU32::new(2).expect("2 is non-zero"),
+                saliency_bias: 0.35,
+            }),
+        },
+        cap: Some(CapConfig::default()),
+        ..Default::default()
+    }
+}
+
+fn deserialize_image_config<'de, D>(deserializer: D) -> Result<ImagePipelineConfig, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<toml::Value>::deserialize(deserializer)?;
+    let mut merged =
+        toml::Value::try_from(default_image_config()).map_err(serde::de::Error::custom)?;
+    if let Some(value) = value {
+        merge_toml_value(&mut merged, value);
+    }
+    merged.try_into().map_err(serde::de::Error::custom)
+}
+
+fn merge_toml_value(dst: &mut toml::Value, src: toml::Value) {
+    match (dst, src) {
+        (toml::Value::Table(dst), toml::Value::Table(src)) => {
+            for (key, value) in src {
+                match dst.get_mut(&key) {
+                    Some(existing) => merge_toml_value(existing, value),
+                    None => {
+                        dst.insert(key, value);
+                    }
+                }
+            }
+        }
+        (dst, src) => *dst = src,
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("failed to read config file `{path}`")]
@@ -187,12 +257,25 @@ output = ".config/hypr/colors.conf"
 
 [config]
 seed_count = 20
+
+[image.saliency]
+method = { LocalContrast = { blur_radius = 5, color_weight = 1.0, luminance_weight = 0.5, global_mix = 0.1, robust_normalize = true } }
+
+[image.sampling]
+method = { FarthestPointLab = { count = 16, candidate_stride = 4, saliency_bias = 0.5 } }
 "#,
         )
         .expect("config should parse");
 
         assert_eq!(config.general.palettes.len(), 2);
         assert_eq!(config.config.seed_count, Some(20));
+        match &config.image.saliency.method {
+            chromoxide_image::SaliencyMethod::LocalContrast(cfg) => {
+                assert_eq!(cfg.blur_radius, 5);
+                assert_eq!(cfg.luminance_weight, 0.5);
+            }
+            _ => panic!("expected local contrast saliency"),
+        }
 
         assert_eq!(config.templates.len(), 2);
         assert_eq!(
@@ -256,6 +339,25 @@ keep_top_k = 3
     #[test]
     fn default_path_suffix_is_stable() {
         assert!(Config::default_path().ends_with(Path::new("chrox/config.toml")));
+    }
+
+    #[test]
+    fn default_image_config_matches_cli_pipeline_defaults() {
+        let config = Config::default();
+        match &config.image.saliency.method {
+            chromoxide_image::SaliencyMethod::LocalContrast(cfg) => {
+                assert_eq!(cfg.blur_radius, 3);
+            }
+            _ => panic!("expected local contrast saliency"),
+        }
+        match &config.image.sampling.method {
+            chromoxide_image::SamplingMethod::FarthestPointLab(cfg) => {
+                assert_eq!(cfg.count.get(), 24);
+                assert_eq!(cfg.candidate_stride.get(), 2);
+            }
+            _ => panic!("expected farthest point sampling"),
+        }
+        assert!(config.image.cap.is_some());
     }
 
     #[test]

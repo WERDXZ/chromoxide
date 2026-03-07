@@ -11,4 +11,4 @@ thiserror = "2.0"
 dirs = "6.0"
 phf = { version = "0.13.1", features = ["macros"] }
 chromoxide = { path = "../chromoxide", features = ["serde"] }
-chromoxide-image = { path = "../chromoxide-image" }
+chromoxide-image = { path = "../chromoxide-image", features = ["serde"] }

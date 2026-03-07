@@ -1,14 +1,10 @@
 //! Argument parsing and command dispatch.
 
-use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 use chromoxide::convert::{oklab_to_linear_srgb, relative_luminance};
-use chromoxide_image::{
-    CapConfig, FarthestPointLabConfig, ImagePipelineConfig, LocalContrastConfig,
-    SamplingConfig, SamplingMethod, SaliencyConfig, SaliencyMethod, prepare_support_from_path,
-};
+use chromoxide_image::prepare_support_from_path;
 
 use crate::config::Config;
 use crate::filter;
@@ -185,7 +181,7 @@ pub fn run(args: Args) -> Result<(), Error> {
             }
 
             let ctx = load_context(args.config.as_ref(), &args.palettes)?;
-            let support = prepare_support_from_path(&image, &default_test_pipeline_config())?;
+            let support = prepare_support_from_path(&image, &ctx.config.image)?;
 
             for (idx, palette_id) in palette_ids.iter().enumerate() {
                 let record = ctx
@@ -268,7 +264,7 @@ fn render_mode(image_path: PathBuf, ctx: &RunContext, config_path: Option<&PathB
 
     validate_template_references(&engine, &ctx.registry)?;
 
-    let support = prepare_support_from_path(&image_path, &default_test_pipeline_config())?;
+    let support = prepare_support_from_path(&image_path, &ctx.config.image)?;
     let palette_ids = engine.required_palettes();
     let mut solved = std::collections::HashMap::with_capacity(palette_ids.len());
     for palette_id in palette_ids {
@@ -390,23 +386,6 @@ fn render_template_source(
         }
     }
     Ok(out)
-}
-
-fn default_test_pipeline_config() -> ImagePipelineConfig {
-    ImagePipelineConfig {
-        saliency: SaliencyConfig {
-            method: SaliencyMethod::LocalContrast(LocalContrastConfig::default()),
-        },
-        sampling: SamplingConfig {
-            method: SamplingMethod::FarthestPointLab(FarthestPointLabConfig {
-                count: NonZeroUsize::new(24).expect("24 is non-zero"),
-                candidate_stride: NonZeroU32::new(2).expect("2 is non-zero"),
-                saliency_bias: 0.35,
-            }),
-        },
-        cap: Some(CapConfig::default()),
-        ..Default::default()
-    }
 }
 
 fn format_palette_output(
