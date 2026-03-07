@@ -304,6 +304,7 @@ name = "Two"
         std::fs::write(
             &first,
             r#"
+id = "shared"
 name = "Shared"
 "#,
         )
@@ -313,6 +314,7 @@ name = "Shared"
         std::fs::write(
             &second,
             r#"
+id = "shared"
 name = "shared"
 "#,
         )

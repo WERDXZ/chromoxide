@@ -143,7 +143,7 @@ impl TemplateEntry {
     }
 
     pub fn resolve_output(&self, base_dir: &Path) -> PathBuf {
-        resolve_path(base_dir, &self.output)
+        resolve_output_path(base_dir, &self.output)
     }
 }
 
@@ -152,6 +152,18 @@ fn resolve_path(base_dir: &Path, path: &Path) -> PathBuf {
         path.to_path_buf()
     } else {
         base_dir.join(path)
+    }
+}
+
+fn resolve_output_path(base_dir: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+
+    let home = dirs::home_dir().or_else(|| std::env::current_dir().ok());
+    match home {
+        Some(home) => home.join(path),
+        None => base_dir.join(path),
     }
 }
 
@@ -281,6 +293,12 @@ method = { FarthestPointLab = { count = 16, candidate_stride = 4, saliency_bias 
         assert_eq!(
             config.templates[0].resolve_input(Path::new("/tmp/chrox")),
             Path::new("/tmp/chrox/templates/alacritty.toml")
+        );
+        let expected_output_base =
+            dirs::home_dir().unwrap_or_else(|| std::env::current_dir().expect("cwd should exist"));
+        assert_eq!(
+            config.templates[0].resolve_output(Path::new("/tmp/chrox")),
+            expected_output_base.join(".config/alacritty/colors.toml")
         );
     }
 

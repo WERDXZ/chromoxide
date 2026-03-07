@@ -771,12 +771,10 @@ palettes = ["palettes"]
         .expect("template should be written");
         std::fs::write(
             &config_path,
-            r#"
-[[templates]]
-name = "demo"
-input = "templates/demo.txt"
-output = "out/demo.txt"
-"#,
+            format!(
+                "[[templates]]\nname = \"demo\"\ninput = \"templates/demo.txt\"\noutput = \"{}\"\n",
+                output_path.display()
+            ),
         )
         .expect("config should be written");
 

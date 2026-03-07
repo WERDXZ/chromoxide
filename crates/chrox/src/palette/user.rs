@@ -42,6 +42,8 @@ pub struct PaletteFile {
     pub terms: Vec<WeightedTerm>,
     #[serde(default)]
     pub config: PartialSolveConfig,
+    #[serde(skip)]
+    pub source_path: Option<PathBuf>,
 }
 
 impl FromStr for PaletteFile {
@@ -60,7 +62,12 @@ impl PaletteFile {
             source,
         })?;
 
-        toml::from_str(&input).map_err(|source| Error::ParseAtPath { path, source })
+        let mut palette: Self = toml::from_str(&input).map_err(|source| Error::ParseAtPath {
+            path: path.clone(),
+            source,
+        })?;
+        palette.source_path = Some(path);
+        Ok(palette)
     }
 
     /// Stable identifier derived from palette file name.
@@ -115,7 +122,11 @@ impl Palette for PaletteFile {
     fn id(&self) -> String {
         match self.id.as_deref() {
             Some(id) => slugify(id),
-            None => slugify(&self.name),
+            None => self
+                .source_path
+                .as_deref()
+                .map(Self::id_from_path)
+                .unwrap_or_else(|| slugify(&self.name)),
         }
     }
 
@@ -304,6 +315,33 @@ domain = { lightness = { min = 0.70, max = 0.98 }, chroma = { min = 0.00, max = 
             PaletteFile::id_from_path(Path::new("/tmp/---.toml")),
             "palette"
         );
+    }
+
+    #[test]
+    fn from_path_uses_filename_for_implicit_id() {
+        let dir = std::env::temp_dir().join(format!(
+            "chrox-palette-id-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time should be after epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("test directory should be created");
+        let path = dir.join("Stable Name.toml");
+        std::fs::write(
+            &path,
+            r#"
+name = "Display Name Changes Fine"
+"#,
+        )
+        .expect("palette should be written");
+
+        let palette = PaletteFile::from_path(&path).expect("palette should load");
+        assert_eq!(palette.id(), "stable-name");
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
