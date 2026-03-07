@@ -1,5 +1,5 @@
-use chromoxide::Oklch;
 use chromoxide::convert::oklab_to_linear_srgb;
+use chromoxide::Oklch;
 use phf::phf_map;
 
 pub type FilterFn = fn(Oklch) -> String;
@@ -78,7 +78,7 @@ fn hue_degrees(color: Oklch) -> String {
     format!("{:.2}", hue_to_degrees(color.h))
 }
 
-fn srgb_u8(color: Oklch) -> (u8, u8, u8) {
+pub fn srgb_u8(color: Oklch) -> (u8, u8, u8) {
     let linear = oklab_to_linear_srgb(color.to_oklab());
     let r = to_u8(linear_to_srgb_channel(linear.r));
     let g = to_u8(linear_to_srgb_channel(linear.g));

@@ -56,6 +56,8 @@ pub enum Error {
         #[source]
         source: Box<crate::palette::SolveError>,
     },
+    #[error("internal error: {message}")]
+    Internal { message: &'static str },
 }
 
 impl From<crate::palette::registry::Error> for Error {
@@ -204,7 +206,7 @@ pub fn run(args: Args) -> Result<(), Error> {
                                 id: record.id.clone(),
                                 source: Box::new(source),
                             })?;
-                        format_palette_output(&record.id, &record.palette.name, &colors)
+                        format_palette_output(&record.id, &record.palette.name, &colors)?
                     }
                     PaletteRecordRef::Builtin(record) => {
                         let palette = (record.build)();
@@ -218,7 +220,7 @@ pub fn run(args: Args) -> Result<(), Error> {
                                 id: record.id.to_string(),
                                 source: Box::new(source),
                             })?;
-                        format_palette_output(record.id, record.name, &colors)
+                        format_palette_output(record.id, record.name, &colors)?
                     }
                 };
 
@@ -279,7 +281,9 @@ fn render_mode(image_path: PathBuf, ctx: &RunContext, config_path: Option<&PathB
     }
 
     for job in render_jobs {
-        let source = engine.source(job.source).expect("parsed source should exist");
+        let source = engine.source(job.source).ok_or(Error::Internal {
+            message: "parsed source missing from template engine",
+        })?;
         let rendered = render_template_source(source, &engine, &solved)?;
         if let Some(parent) = job.output.parent()
             && !parent.as_os_str().is_empty()
@@ -301,9 +305,9 @@ fn render_mode(image_path: PathBuf, ctx: &RunContext, config_path: Option<&PathB
 
 fn validate_template_references(engine: &TemplateEngine, registry: &PaletteRegistry) -> Result<(), Error> {
     for (_, source_index, template) in engine.iter_templates() {
-        let source = engine
-            .source(source_index)
-            .expect("template source should exist");
+        let source = engine.source(source_index).ok_or(Error::Internal {
+            message: "template source missing from template engine",
+        })?;
         let palette_name = template.palette_name(source);
         let member_name = template.member_name(source);
         let filter_name = template.filter_name(source).unwrap_or("hex");
@@ -367,7 +371,9 @@ fn render_template_source(
         match token {
             Token::Text(span) => out.push_str(source.slice(span)),
             Token::Slot(index) => {
-                let template = engine.template(*index).expect("template should exist");
+                let template = engine.template(*index).ok_or(Error::Internal {
+                    message: "template missing from template engine",
+                })?;
                 let palette_name = template.palette_name(source);
                 let member_name = template.member_name(source);
                 let filter_name = template.filter_name(source).unwrap_or("hex");
@@ -392,19 +398,25 @@ fn format_palette_output(
     id: &str,
     name: &str,
     colors: &std::collections::HashMap<String, chromoxide::Oklch>,
-) -> String {
+) -> Result<String, Error> {
     let mut entries = colors.iter().collect::<Vec<_>>();
     entries.sort_by_key(|(name, _)| *name);
 
     let rows = entries
         .into_iter()
-        .map(|(slot, color)| PaletteRow {
-            slot: slot.as_str(),
-            hex: filter::apply("hex", *color).expect("hex filter should exist"),
-            oklch: filter::apply("oklch", *color).expect("oklch filter should exist"),
-            preview: color_preview(*color, preview_label(slot)),
+        .map(|(slot, color)| {
+            Ok::<PaletteRow<'_>, Error>(PaletteRow {
+                slot: slot.as_str(),
+                hex: filter::apply("hex", *color).ok_or(Error::Internal {
+                    message: "built-in hex filter missing",
+                })?,
+                oklch: filter::apply("oklch", *color).ok_or(Error::Internal {
+                    message: "built-in oklch filter missing",
+                })?,
+                preview: color_preview(*color, preview_label(slot)),
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
 
     let slot_width = rows
         .iter()
@@ -438,7 +450,7 @@ fn format_palette_output(
             row.slot, row.hex, row.oklch, row.preview
         ));
     }
-    out
+    Ok(out)
 }
 
 struct PaletteRow<'a> {
@@ -467,12 +479,7 @@ fn preview_label(slot: &str) -> &str {
 }
 
 fn srgb_u8(color: chromoxide::Oklch) -> (u8, u8, u8) {
-    let linear = oklab_to_linear_srgb(color.to_oklab());
-    (
-        to_srgb_u8(linear.r),
-        to_srgb_u8(linear.g),
-        to_srgb_u8(linear.b),
-    )
+    filter::srgb_u8(color)
 }
 
 fn readable_text_rgb(color: chromoxide::Oklch) -> (u8, u8, u8) {
@@ -491,15 +498,6 @@ fn contrast_ratio(a: f64, b: f64) -> f64 {
     let lighter = a.max(b);
     let darker = a.min(b);
     (lighter + 0.05) / (darker + 0.05)
-}
-
-fn to_srgb_u8(channel: f64) -> u8 {
-    let srgb = if channel <= 0.003_130_8 {
-        12.92 * channel
-    } else {
-        1.055 * channel.powf(1.0 / 2.4) - 0.055
-    };
-    (srgb.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 #[derive(Debug)]
@@ -920,7 +918,8 @@ output = "out/bad-filter.txt"
             },
         );
 
-        let output = format_palette_output("cover-salient", "Cover + Salient", &colors);
+        let output =
+            format_palette_output("cover-salient", "Cover + Salient", &colors).expect("format should succeed");
         let lines = output.lines().collect::<Vec<_>>();
 
         assert_eq!(lines[0], "palette: cover-salient");
