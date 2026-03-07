@@ -1,10 +1,10 @@
-mod common;
 mod ansi16;
 mod ansi16_light;
 mod ansi8_derived;
 mod ansi8_derived_light;
 mod base16;
 mod base16_bright;
+mod common;
 mod cover_salient;
 mod export;
 mod recipe;

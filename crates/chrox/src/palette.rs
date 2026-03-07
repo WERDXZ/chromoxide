@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use chromoxide::{ImageCap, Oklch, PaletteError, PaletteProblem, WeightedSample, solve};
+use chromoxide::{solve, ImageCap, Oklch, PaletteError, PaletteProblem, WeightedSample};
 
 use crate::solve_config::PartialSolveConfig;
 
 pub mod builtin;
-pub mod user;
 pub mod registry;
+pub mod user;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SolveError {
@@ -19,6 +19,7 @@ pub enum SolveError {
 pub trait Palette {
     fn id(&self) -> String;
     fn name(&self) -> String;
+    fn members(&self) -> Vec<String>;
     fn solve(
         &self,
         samples: Vec<WeightedSample>,

@@ -123,6 +123,10 @@ impl Palette for PaletteFile {
         self.name.clone()
     }
 
+    fn members(&self) -> Vec<String> {
+        self.slots.iter().map(|slot| slot.name.clone()).collect()
+    }
+
     fn solve(
         &self,
         samples: Vec<WeightedSample>,
@@ -268,6 +272,26 @@ name = "My Palette"
         .expect("palette should parse");
 
         assert_eq!(palette.id(), "custom-palette-id");
+    }
+
+    #[test]
+    fn members_match_slot_names() {
+        let palette = PaletteFile::from_str(
+            r#"
+name = "demo"
+
+[[slots]]
+name = "bg"
+domain = { lightness = { min = 0.10, max = 0.25 }, chroma = { min = 0.00, max = 0.06 }, hue = "Any", cap_policy = "Ignore", chroma_epsilon = 0.02 }
+
+[[slots]]
+name = "fg"
+domain = { lightness = { min = 0.70, max = 0.98 }, chroma = { min = 0.00, max = 0.08 }, hue = "Any", cap_policy = "Ignore", chroma_epsilon = 0.02 }
+"#,
+        )
+        .expect("palette should parse");
+
+        assert_eq!(palette.members(), vec!["bg".to_string(), "fg".to_string()]);
     }
 
     #[test]

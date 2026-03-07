@@ -165,11 +165,14 @@ pub fn run(args: Args) -> Result<(), Error> {
                     println!("path: {}", record.path.display());
                     println!("slots: {}", record.palette.slots.len());
                     println!("terms: {}", record.palette.terms.len());
+                    print_members(&record.palette.members());
                 }
                 Some(PaletteRecordRef::Builtin(record)) => {
+                    let palette = (record.build)();
                     println!("source: builtin");
                     println!("id: {}", record.id);
                     println!("name: {}", record.name);
+                    print_members(&palette.members());
                 }
                 None => return Err(Error::PaletteNotFound { id }),
             }
@@ -263,6 +266,8 @@ fn render_mode(image_path: PathBuf, ctx: &RunContext, config_path: Option<&PathB
         });
     }
 
+    validate_template_references(&engine, &ctx.registry)?;
+
     let support = prepare_support_from_path(&image_path, &default_test_pipeline_config())?;
     let palette_ids = engine.required_palettes();
     let mut solved = std::collections::HashMap::with_capacity(palette_ids.len());
@@ -296,6 +301,41 @@ fn render_mode(image_path: PathBuf, ctx: &RunContext, config_path: Option<&PathB
     }
 
     Ok(())
+}
+
+fn validate_template_references(engine: &TemplateEngine, registry: &PaletteRegistry) -> Result<(), Error> {
+    for (_, source_index, template) in engine.iter_templates() {
+        let source = engine
+            .source(source_index)
+            .expect("template source should exist");
+        let palette_name = template.palette_name(source);
+        let member_name = template.member_name(source);
+        let filter_name = template.filter_name(source).unwrap_or("hex");
+
+        let record = registry.resolve(palette_name).ok_or_else(|| Error::PaletteNotFound {
+            id: palette_name.to_string(),
+        })?;
+        if !palette_members(record).iter().any(|member| member == member_name) {
+            return Err(Error::MissingPaletteMember {
+                palette: palette_name.to_string(),
+                member: member_name.to_string(),
+            });
+        }
+        if !filter::is_supported(filter_name) {
+            return Err(Error::UnsupportedFilter {
+                name: filter_name.to_string(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn palette_members(record: PaletteRecordRef<'_>) -> Vec<String> {
+    match record {
+        PaletteRecordRef::User(record) => record.palette.members(),
+        PaletteRecordRef::Builtin(record) => (record.build)().members(),
+    }
 }
 
 fn solve_palette_record(
@@ -558,6 +598,13 @@ fn print_palette_paths(paths: &[PathBuf]) {
     }
 }
 
+fn print_members(members: &[String]) {
+    println!("members: {}", members.len());
+    for member in members {
+        println!("  - {member}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -766,6 +813,78 @@ output = "out/demo.txt"
         assert!(rendered.contains("bg=#"));
         assert!(rendered.contains("fg=#"));
         assert!(rendered.contains("red=#"));
+
+        let _ = std::fs::remove_file(config_path);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn render_mode_rejects_missing_template_member_before_rendering() {
+        let dir = unique_temp_dir();
+        let templates_dir = dir.join("templates");
+        std::fs::create_dir_all(&templates_dir).expect("templates dir should be created");
+
+        let image_path = dir.join("tiny.ppm");
+        let config_path = dir.join("config.toml");
+        let template_path = templates_dir.join("bad.txt");
+        write_test_image(&image_path);
+        std::fs::write(&template_path, "x={{base16.nope|hex}}\n").expect("template should be written");
+        std::fs::write(
+            &config_path,
+            r#"
+[[templates]]
+name = "bad"
+input = "templates/bad.txt"
+output = "out/bad.txt"
+"#,
+        )
+        .expect("config should be written");
+
+        let err = run(Args {
+            command: None,
+            image: Some(image_path),
+            palettes: Vec::new(),
+            config: Some(config_path.clone()),
+        })
+        .expect_err("missing member should fail");
+
+        assert!(matches!(err, Error::MissingPaletteMember { palette, member } if palette == "base16" && member == "nope"));
+
+        let _ = std::fs::remove_file(config_path);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn render_mode_rejects_unsupported_filter_before_rendering() {
+        let dir = unique_temp_dir();
+        let templates_dir = dir.join("templates");
+        std::fs::create_dir_all(&templates_dir).expect("templates dir should be created");
+
+        let image_path = dir.join("tiny.ppm");
+        let config_path = dir.join("config.toml");
+        let template_path = templates_dir.join("bad-filter.txt");
+        write_test_image(&image_path);
+        std::fs::write(&template_path, "x={{base16.base00|wat}}\n").expect("template should be written");
+        std::fs::write(
+            &config_path,
+            r#"
+[[templates]]
+name = "bad-filter"
+input = "templates/bad-filter.txt"
+output = "out/bad-filter.txt"
+"#,
+        )
+        .expect("config should be written");
+
+        let err = run(Args {
+            command: None,
+            image: Some(image_path),
+            palettes: Vec::new(),
+            config: Some(config_path.clone()),
+        })
+        .expect_err("unsupported filter should fail");
+
+        assert!(matches!(err, Error::UnsupportedFilter { name } if name == "wat"));
 
         let _ = std::fs::remove_file(config_path);
         let _ = std::fs::remove_dir_all(dir);

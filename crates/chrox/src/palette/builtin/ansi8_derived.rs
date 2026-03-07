@@ -188,6 +188,15 @@ pub(crate) struct DeriveAnsiBrightExport {
 }
 
 impl BuiltinExport for DeriveAnsiBrightExport {
+    fn members(&self, slots: &[chromoxide::SlotSpec]) -> Vec<String> {
+        let mut out = Vec::with_capacity(slots.len() * 2);
+        for slot in slots {
+            out.push(slot.name.clone());
+            out.push(format!("bright_{}", slot.name));
+        }
+        out
+    }
+
     fn export(&self, slots: &[chromoxide::SlotSpec], colors: &[Oklch]) -> HashMap<String, Oklch> {
         let mut out = HashMap::with_capacity(16);
         for (slot, color) in slots.iter().zip(colors.iter().copied()) {
@@ -258,5 +267,15 @@ mod tests {
         let bright = derive_bright("black", black, false);
         assert!(bright.l > black.l);
         assert!(bright.c <= black.c);
+    }
+
+    #[test]
+    fn palette_reports_derived_members() {
+        let palette = super::ansi_8_derived();
+        let members = palette.members();
+        assert!(members.contains(&"red".to_string()));
+        assert!(members.contains(&"bright_red".to_string()));
+        assert!(members.contains(&"black".to_string()));
+        assert!(members.contains(&"bright_black".to_string()));
     }
 }

@@ -62,6 +62,10 @@ impl Palette for BuiltinPalette {
         self.name.to_string()
     }
 
+    fn members(&self) -> Vec<String> {
+        self.export.members(&self.slots)
+    }
+
     fn solve(
         &self,
         samples: Vec<WeightedSample>,

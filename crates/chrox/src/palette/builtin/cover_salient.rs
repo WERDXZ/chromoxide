@@ -130,6 +130,14 @@ fn salient_chroma_term(slot: usize, name: &str) -> WeightedTerm {
 struct CoverSalientExport;
 
 impl BuiltinExport for CoverSalientExport {
+    fn members(&self, _slots: &[SlotSpec]) -> Vec<String> {
+        vec![
+            "cover".to_string(),
+            "salient-1".to_string(),
+            "salient-2".to_string(),
+        ]
+    }
+
     fn export(&self, slots: &[SlotSpec], colors: &[Oklch]) -> HashMap<String, Oklch> {
         let mut out = HashMap::with_capacity(3);
         let mut salients = Vec::with_capacity(2);
@@ -246,5 +254,18 @@ mod tests {
         assert!(colors.contains_key("salient-1"));
         assert!(colors.contains_key("salient-2"));
         assert!(colors["salient-1"].h <= colors["salient-2"].h);
+    }
+
+    #[test]
+    fn cover_salient_reports_exported_members() {
+        let palette = cover_salient();
+        assert_eq!(
+            palette.members(),
+            vec![
+                "cover".to_string(),
+                "salient-1".to_string(),
+                "salient-2".to_string(),
+            ]
+        );
     }
 }
