@@ -15,9 +15,39 @@ pub struct BuiltinPalette {
 }
 
 static BUILTIN_PALETTES: phf::Map<&'static str, BuiltinPalette> = phf_map! {
+    "ansi-16" => BuiltinPalette {
+        id: "ansi-16",
+        name: "ANSI 16",
+        build: builtin::ansi_16,
+    },
+    "ansi-8-derived" => BuiltinPalette {
+        id: "ansi-8-derived",
+        name: "ANSI 8 Derived",
+        build: builtin::ansi_8_derived,
+    },
+    "ansi-16-light" => BuiltinPalette {
+        id: "ansi-16-light",
+        name: "ANSI 16 Light",
+        build: builtin::ansi_16_light,
+    },
+    "ansi-8-derived-light" => BuiltinPalette {
+        id: "ansi-8-derived-light",
+        name: "ANSI 8 Derived Light",
+        build: builtin::ansi_8_derived_light,
+    },
+    "base16" => BuiltinPalette {
+        id: "base16",
+        name: "Base16",
+        build: builtin::base16,
+    },
+    "base16-bright" => BuiltinPalette {
+        id: "base16-bright",
+        name: "Base16 Bright",
+        build: builtin::base16_bright,
+    },
     "cover-salient" => BuiltinPalette {
         id: "cover-salient",
-        name: "Cover + Salient",
+        name: "Cover + 2 Salients",
         build: builtin::cover_salient,
     },
 };
@@ -318,5 +348,24 @@ name = "Shadow"
 
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn builtins_include_expected_palette_families() {
+        let registry = PaletteRegistry::default();
+        for id in [
+            "ansi-16",
+            "ansi-8-derived",
+            "ansi-16-light",
+            "ansi-8-derived-light",
+            "base16",
+            "base16-bright",
+            "cover-salient",
+        ] {
+            assert!(
+                registry.builtin_palette(id).is_some(),
+                "missing builtin {id}"
+            );
+        }
     }
 }

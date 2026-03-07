@@ -266,7 +266,7 @@ fn format_palette_output(
     colors: &std::collections::HashMap<String, chromoxide::Oklch>,
 ) -> String {
     let mut entries = colors.iter().collect::<Vec<_>>();
-    entries.sort_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
+    entries.sort_by_key(|(name, _)| *name);
 
     let rows = entries
         .into_iter()
