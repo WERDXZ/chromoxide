@@ -14,6 +14,7 @@ use crate::config::Config;
 use crate::filter;
 use crate::palette::Palette;
 use crate::palette::registry::{PaletteRecordRef, PaletteRegistry};
+use crate::template::{TemplateEngine, Token};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -33,6 +34,26 @@ pub enum Error {
     PaletteNotFound { id: String },
     #[error("failed to prepare image support")]
     ImageSupport(#[from] chromoxide_image::ImagePipelineError),
+    #[error("no templates configured")]
+    NoTemplates,
+    #[error("failed to parse template")]
+    Template(#[from] crate::template::Error),
+    #[error("palette `{palette}` missing member `{member}`")]
+    MissingPaletteMember { palette: String, member: String },
+    #[error("unsupported filter `{name}`")]
+    UnsupportedFilter { name: String },
+    #[error("failed to create output directory `{path}`")]
+    CreateOutputDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to write output file `{path}`")]
+    WriteOutput {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("failed to solve palette `{id}`")]
     PaletteSolve {
         id: String,
@@ -211,7 +232,6 @@ pub fn run(args: Args) -> Result<(), Error> {
             Ok(())
         }
         None => {
-            // Render mode (config/template-driven palette inference)
             let image_path = args.image.ok_or(Error::MissingImage)?;
 
             if !image_path.exists() {
@@ -219,28 +239,117 @@ pub fn run(args: Args) -> Result<(), Error> {
             }
             let ctx = load_context(args.config.as_ref(), &args.palettes)?;
 
-            // TODO:
-            // 1) load and parse configured templates
-            // 2) scan {{palette.member | filter}} references and infer required palettes
-            // 3) chromoxide-image: samples + cap
-            // 4) solve per required palette
-            // 5) render template(s) -> output files
-
-            println!("Processing image: {}", image_path.display());
-            if let Some(cfg) = &args.config {
-                println!("Using config: {}", cfg.display());
-            }
-            print_palette_paths(&ctx.merged_palette_paths);
-            println!("Configured templates: {}", ctx.config.templates.len());
-            println!(
-                "Discovered {} user palettes and {} builtin palettes",
-                ctx.registry.user_palette_count(),
-                ctx.registry.builtin_palette_count()
-            );
-
-            Ok(())
+            render_mode(image_path, &ctx, args.config.as_ref())
         }
     }
+}
+
+fn render_mode(image_path: PathBuf, ctx: &RunContext, config_path: Option<&PathBuf>) -> Result<(), Error> {
+    if ctx.config.templates.is_empty() {
+        return Err(Error::NoTemplates);
+    }
+
+    let config_base_dir = config_base_dir(config_path);
+    let mut engine = TemplateEngine::new();
+    let mut render_jobs = Vec::with_capacity(ctx.config.templates.len());
+    for entry in &ctx.config.templates {
+        let input = entry.resolve_input(&config_base_dir);
+        let output = entry.resolve_output(&config_base_dir);
+        let source = engine.parse_file(&input)?;
+        render_jobs.push(RenderJob {
+            name: entry.name.clone(),
+            output,
+            source,
+        });
+    }
+
+    let support = prepare_support_from_path(&image_path, &default_test_pipeline_config())?;
+    let palette_ids = engine.required_palettes();
+    let mut solved = std::collections::HashMap::with_capacity(palette_ids.len());
+    for palette_id in palette_ids {
+        let record = ctx
+            .registry
+            .resolve(&palette_id)
+            .ok_or_else(|| Error::PaletteNotFound {
+                id: palette_id.clone(),
+            })?;
+        let colors = solve_palette_record(record, &support.samples, support.image_cap.clone(), &ctx.config.config)?;
+        solved.insert(palette_id, colors);
+    }
+
+    for job in render_jobs {
+        let source = engine.source(job.source).expect("parsed source should exist");
+        let rendered = render_template_source(source, &engine, &solved)?;
+        if let Some(parent) = job.output.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).map_err(|source| Error::CreateOutputDir {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        std::fs::write(&job.output, rendered).map_err(|source| Error::WriteOutput {
+            path: job.output.clone(),
+            source,
+        })?;
+        println!("rendered {} -> {}", job.name, job.output.display());
+    }
+
+    Ok(())
+}
+
+fn solve_palette_record(
+    record: PaletteRecordRef<'_>,
+    samples: &[chromoxide::WeightedSample],
+    image_cap: Option<chromoxide::ImageCap>,
+    config: &crate::solve_config::PartialSolveConfig,
+) -> Result<std::collections::HashMap<String, chromoxide::Oklch>, Error> {
+    match record {
+        PaletteRecordRef::User(record) => record
+            .palette
+            .solve(samples.to_vec(), image_cap, config)
+            .map_err(|source| Error::PaletteSolve {
+                id: record.id.clone(),
+                source: Box::new(source),
+            }),
+        PaletteRecordRef::Builtin(record) => (record.build)()
+            .solve(samples.to_vec(), image_cap, config)
+            .map_err(|source| Error::PaletteSolve {
+                id: record.id.to_string(),
+                source: Box::new(source),
+            }),
+    }
+}
+
+fn render_template_source(
+    source: &crate::template::TemplateSource,
+    engine: &TemplateEngine,
+    palettes: &std::collections::HashMap<String, std::collections::HashMap<String, chromoxide::Oklch>>,
+) -> Result<String, Error> {
+    let mut out = String::with_capacity(source.content().len());
+    for token in source.tokens() {
+        match token {
+            Token::Text(span) => out.push_str(source.slice(span)),
+            Token::Slot(index) => {
+                let template = engine.template(*index).expect("template should exist");
+                let palette_name = template.palette_name(source);
+                let member_name = template.member_name(source);
+                let filter_name = template.filter_name(source).unwrap_or("hex");
+                let palette = palettes.get(palette_name).ok_or_else(|| Error::PaletteNotFound {
+                    id: palette_name.to_string(),
+                })?;
+                let color = palette.get(member_name).ok_or_else(|| Error::MissingPaletteMember {
+                    palette: palette_name.to_string(),
+                    member: member_name.to_string(),
+                })?;
+                let rendered = filter::apply(filter_name, *color).ok_or_else(|| Error::UnsupportedFilter {
+                    name: filter_name.to_string(),
+                })?;
+                out.push_str(&rendered);
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn default_test_pipeline_config() -> ImagePipelineConfig {
@@ -381,6 +490,13 @@ struct RunContext {
     registry: PaletteRegistry,
 }
 
+#[derive(Debug)]
+struct RenderJob {
+    name: String,
+    output: PathBuf,
+    source: crate::template::SourceIndex,
+}
+
 fn load_context(config_path: Option<&PathBuf>, cli_palettes: &[PathBuf]) -> Result<RunContext, Error> {
     if let Some(cfg) = config_path
         && !cfg.exists()
@@ -459,6 +575,10 @@ mod tests {
             .expect("time should be after epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("chrox-cli-test-{nanos}-{}", std::process::id()))
+    }
+
+    fn write_test_image(path: &Path) {
+        std::fs::write(path, b"P3\n1 1\n255\n200 80 120\n").expect("test image should be written");
     }
 
     #[test]
@@ -578,6 +698,74 @@ palettes = ["palettes"]
             "expected missing path {:?}, got {err}",
             expected_missing
         );
+
+        let _ = std::fs::remove_file(config_path);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn render_mode_requires_templates() {
+        let dir = unique_temp_dir();
+        std::fs::create_dir_all(&dir).expect("test temp dir should be created");
+        let image_path = dir.join("tiny.ppm");
+        let config_path = dir.join("config.toml");
+        write_test_image(&image_path);
+        std::fs::write(&config_path, "").expect("config should be written");
+
+        let err = run(Args {
+            command: None,
+            image: Some(image_path),
+            palettes: Vec::new(),
+            config: Some(config_path.clone()),
+        })
+        .expect_err("missing templates should fail");
+
+        assert!(matches!(err, Error::NoTemplates));
+
+        let _ = std::fs::remove_file(config_path);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn render_mode_renders_templates_to_output_files() {
+        let dir = unique_temp_dir();
+        let templates_dir = dir.join("templates");
+        let out_dir = dir.join("out");
+        std::fs::create_dir_all(&templates_dir).expect("templates dir should be created");
+
+        let image_path = dir.join("tiny.ppm");
+        let config_path = dir.join("config.toml");
+        let template_path = templates_dir.join("demo.txt");
+        let output_path = out_dir.join("demo.txt");
+        write_test_image(&image_path);
+        std::fs::write(
+            &template_path,
+            "bg={{base16.base00|hex}}\nfg={{base16.base05|hex}}\nred={{ansi-8-derived.red|hex}}\n",
+        )
+        .expect("template should be written");
+        std::fs::write(
+            &config_path,
+            r#"
+[[templates]]
+name = "demo"
+input = "templates/demo.txt"
+output = "out/demo.txt"
+"#,
+        )
+        .expect("config should be written");
+
+        run(Args {
+            command: None,
+            image: Some(image_path),
+            palettes: Vec::new(),
+            config: Some(config_path.clone()),
+        })
+        .expect("render mode should succeed");
+
+        let rendered = std::fs::read_to_string(&output_path).expect("output should exist");
+        assert!(rendered.contains("bg=#"));
+        assert!(rendered.contains("fg=#"));
+        assert!(rendered.contains("red=#"));
 
         let _ = std::fs::remove_file(config_path);
         let _ = std::fs::remove_dir_all(dir);
