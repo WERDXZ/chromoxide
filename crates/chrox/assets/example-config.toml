@@ -1,0 +1,65 @@
+# Full example `chrox` config.
+#
+# Copy this to `~/.config/chrox/config.toml` and adjust paths to taste.
+
+[general]
+palettes = [
+  ".local/share/chrox/palettes",
+]
+
+[[templates]]
+name = "alacritty"
+input = "templates/alacritty.toml"
+output = ".config/alacritty/colors.toml"
+
+[[templates]]
+name = "kitty"
+input = "templates/kitty.conf"
+output = ".config/kitty/current-theme.conf"
+
+[[templates]]
+name = "rofi"
+input = "templates/rofi.rasi"
+output = ".config/rofi/colors.rasi"
+
+[image.preprocess]
+max_working_dim = 1600
+resize_filter = "Lanczos3"
+background_rgb8 = [255, 255, 255]
+min_alpha = 0.00392156862745098
+alpha_into_weight = false
+
+[image.saliency]
+method = { LocalContrast = { blur_radius = 3, color_weight = 1.0, luminance_weight = 1.0, global_mix = 0.2, robust_normalize = true } }
+
+[image.sampling]
+method = { FarthestPointLab = { count = 24, candidate_stride = 2, saliency_bias = 0.35 } }
+
+[image.export]
+center_mode = "Centroid"
+normalize_weights = true
+saliency_to_weight_mix = 0.0
+saliency_weight_gamma = 1.0
+frequency_gamma = 1.0
+min_cluster_weight = 0.0
+
+[image.cap]
+source = "PreparedPixels"
+builder = { bins_l = 18, bins_h = 36, min_per_bin = 8, quantile = 0.98, smooth_passes = 1, hue_wrap = true, bias_curve = "Linear" }
+
+[config]
+seed_count = 32
+keep_top_k = 8
+max_iters = 300
+fd_epsilon = 0.0001
+convergence_ftol = 1e-9
+convergence_gtol = 1e-6
+
+# Example user palette files can live under:
+#   ~/.local/share/chrox/palettes/*.toml
+#
+# Example usage:
+#   chrox list
+#   chrox show base16
+#   chrox test cover-salient base16 -- ~/Pictures/wallpaper.jpg
+#   chrox ~/Pictures/wallpaper.jpg

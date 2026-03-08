@@ -94,7 +94,9 @@ Build local documentation:
 cargo doc --workspace --open
 ```
 
+For project terminology, see [VOCABULARY.md](VOCABULARY.md).
+For pipeline and parameter explanations, see [ALGORITHMS.md](ALGORITHMS.md).
+
 ## License
 
 This project is licensed under the MIT License – see the [LICENSE](LICENSE) file for details.
-
