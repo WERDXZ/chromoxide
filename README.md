@@ -8,10 +8,9 @@ Chromoxide solves for optimal color palettes given image evidence, slot‑wise h
 
 ## Crates
 
-This workspace contains two crates:
-
 - **`chromoxide`** – Core optimization engine, domain definitions, and solver.
 - **`chromoxide‑image`** – Image preprocessing, saliency detection, sampling, and support extraction.
+- **`chrox`** – CLI palette generation tool built on top of `chromoxide` and `chromoxide-image`.
 
 ## Usage
 
@@ -21,6 +20,12 @@ Add to your `Cargo.toml` (replace the git URL with your own):
 [dependencies]
 chromoxide = { git = "https://github.com/werdxz/chromoxide" }
 chromoxide-image = { git = "https://github.com/werdxz/chromoxide" }
+```
+
+Install the CLI with:
+
+```bash
+cargo install --git https://github.com/werdxz/chromoxide chrox
 ```
 
 Basic example using pre‑computed samples:
@@ -76,6 +81,8 @@ let solution = solve(&problem)?;
 ```
 
 For a full image‑based pipeline, see the examples in `chromoxide‑image`.
+
+For CLI-driven palette generation and template rendering, see `crates/chrox/README.md`.
 
 ## Examples
 
