@@ -1,12 +1,12 @@
 use std::num::{NonZeroU64, NonZeroUsize};
 
 use chromoxide::{
-    solve_with_rng, CapPolicy, CoverTerm, GradientMode, HueDomain, Interval, PaletteProblem,
-    SaliencyTarget, SaliencyTerm, SlotDomain, SlotSpec, SolveConfig, Term, WeightedSample,
-    WeightedTerm,
+    CapPolicy, CoverTerm, GradientMode, HueDomain, Interval, PaletteProblem, SaliencyTarget,
+    SaliencyTerm, SlotDomain, SlotSpec, SolveConfig, Term, WeightedSample, WeightedTerm,
+    solve_with_rng,
 };
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 
 #[test]
 fn saliency_term_pulls_one_slot_to_salient_region() {
@@ -104,6 +104,7 @@ fn saliency_term_pulls_one_slot_to_salient_region() {
                 term: Term::Saliency(SaliencyTerm {
                     slot: 1,
                     sigma: 0.08,
+                    support_scale: 0.05,
                     target: SaliencyTarget::Min(0.8),
                     hinge_delta: None,
                 }),

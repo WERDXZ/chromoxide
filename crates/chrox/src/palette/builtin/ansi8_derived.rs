@@ -1,22 +1,24 @@
 use std::collections::HashMap;
 
 use chromoxide::{
-    ChromaTargetTerm, ContrastTerm, CoverTerm, Interval, Oklch, ScalarTarget, SupportTerm, Term,
+    ContrastTerm, CoverTerm, Interval, LightnessTargetTerm, Oklch, ScalarTarget, SupportTerm, Term,
     WeightedTerm,
 };
 
 use super::common::{accent_slot, low_chroma_term, neutral_slot, weighted};
 use super::export::BuiltinExport;
+use super::priors;
 use super::recipe::BuiltinPalette;
 use crate::palette::Palette;
 use crate::solve_config::PartialSolveConfig;
 
 pub fn ansi_8_derived() -> Box<dyn Palette> {
-    Box::new(BuiltinPalette::new(
+    Box::new(BuiltinPalette::new_with_dynamic_terms(
         "ansi-8-derived",
         "ANSI 8 Derived",
         slots(),
         terms(),
+        Some(priors::ansi8_terms),
         PartialSolveConfig {
             seed_count: Some(24),
             keep_top_k: Some(8),
@@ -41,8 +43,8 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             340.0,
             45.0,
             Interval {
-                min: 0.35,
-                max: 0.68,
+                min: 0.50,
+                max: 0.66,
             },
             Interval {
                 min: 0.08,
@@ -54,8 +56,8 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             110.0,
             55.0,
             Interval {
-                min: 0.35,
-                max: 0.68,
+                min: 0.60,
+                max: 0.78,
             },
             Interval {
                 min: 0.08,
@@ -67,8 +69,8 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             70.0,
             40.0,
             Interval {
-                min: 0.55,
-                max: 0.84,
+                min: 0.66,
+                max: 0.86,
             },
             Interval {
                 min: 0.07,
@@ -80,8 +82,8 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             225.0,
             60.0,
             Interval {
-                min: 0.35,
-                max: 0.70,
+                min: 0.50,
+                max: 0.66,
             },
             Interval {
                 min: 0.08,
@@ -93,8 +95,8 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             285.0,
             55.0,
             Interval {
-                min: 0.35,
-                max: 0.72,
+                min: 0.52,
+                max: 0.68,
             },
             Interval {
                 min: 0.08,
@@ -106,7 +108,7 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             165.0,
             60.0,
             Interval {
-                min: 0.40,
+                min: 0.56,
                 max: 0.74,
             },
             Interval {
@@ -158,6 +160,18 @@ fn terms() -> Vec<WeightedTerm> {
         (6, "cyan"),
     ] {
         out.push(weighted(
+            &format!("{name}-lightness"),
+            3.0,
+            Term::LightnessTarget(LightnessTargetTerm {
+                slot,
+                target: ScalarTarget::Target {
+                    value: accent_lightness_target(name, false),
+                    delta: 0.035,
+                },
+                hinge_delta: None,
+            }),
+        ));
+        out.push(weighted(
             &format!("{name}-support"),
             2.0,
             Term::Support(SupportTerm {
@@ -165,18 +179,6 @@ fn terms() -> Vec<WeightedTerm> {
                 tau: 0.03,
                 beta: 0.10,
                 epsilon: 1.0e-4,
-            }),
-        ));
-        out.push(weighted(
-            &format!("{name}-chroma"),
-            3.0,
-            Term::ChromaTarget(ChromaTargetTerm {
-                slot,
-                target: ScalarTarget::Target {
-                    value: 1.0,
-                    delta: 0.20,
-                },
-                hinge_delta: Some(0.03),
             }),
         ));
     }
@@ -212,7 +214,7 @@ impl BuiltinExport for DeriveAnsiBrightExport {
 }
 
 fn derive_bright(name: &str, color: Oklch, light: bool) -> Oklch {
-    let (delta_l, scale_c) = if light { (0.05, 1.12) } else { (0.09, 1.12) };
+    let (delta_l, scale_c) = if light { (0.012, 1.02) } else { (0.015, 1.02) };
     match name {
         "black" => Oklch {
             l: (color.l + if light { 0.10 } else { 0.14 }).clamp(0.0, 1.0),
@@ -232,11 +234,29 @@ fn derive_bright(name: &str, color: Oklch, light: bool) -> Oklch {
     }
 }
 
+pub(crate) fn accent_lightness_target(name: &str, light: bool) -> f64 {
+    match (light, name) {
+        (false, "red") => 0.59,
+        (false, "green") => 0.68,
+        (false, "yellow") => 0.72,
+        (false, "blue") => 0.59,
+        (false, "magenta") => 0.60,
+        (false, "cyan") => 0.65,
+        (true, "red") => 0.57,
+        (true, "green") => 0.62,
+        (true, "yellow") => 0.69,
+        (true, "blue") => 0.58,
+        (true, "magenta") => 0.59,
+        (true, "cyan") => 0.63,
+        _ => 0.60,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use chromoxide::Oklch;
 
-    use super::{derive_bright, slots, DeriveAnsiBrightExport};
+    use super::{DeriveAnsiBrightExport, derive_bright, slots};
     use crate::palette::builtin::export::BuiltinExport;
 
     #[test]

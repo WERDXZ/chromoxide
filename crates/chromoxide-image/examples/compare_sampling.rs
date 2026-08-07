@@ -1,9 +1,9 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use chromoxide_image::{
-    FarthestPointLabConfig, ImagePipelineConfig, PreprocessConfig, RandomUniformConfig,
-    ResizeFilter, SaliencyConfig, SaliencyMethod, SamplingConfig, SamplingMethod, StratifiedConfig,
-    UniformGridConfig, prepare_support_from_image_with_rng,
+    FarthestPointLabConfig, ImagePipelineConfig, KMeansPlusPlusLabConfig, PreprocessConfig,
+    RandomUniformConfig, ResizeFilter, SaliencyConfig, SaliencyMethod, SamplingConfig,
+    SamplingMethod, StratifiedConfig, UniformGridConfig, prepare_support_from_image_with_rng,
 };
 use image::{DynamicImage, Rgba, RgbaImage};
 use rand::SeedableRng;
@@ -57,6 +57,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 count: NonZeroUsize::new(20).expect("non-zero"),
                 candidate_stride: NonZeroU32::new(2).expect("non-zero"),
                 saliency_bias: 0.5,
+            }),
+        ),
+        (
+            "KMeansPlusPlusLab",
+            SamplingMethod::KMeansPlusPlusLab(KMeansPlusPlusLabConfig {
+                count: NonZeroUsize::new(20).expect("non-zero"),
+                candidate_stride: NonZeroU32::new(2).expect("non-zero"),
+                saliency_bias: 0.5,
+                max_iters: NonZeroUsize::new(20).expect("non-zero"),
+                convergence_tol: 1.0e-5,
             }),
         ),
     ];

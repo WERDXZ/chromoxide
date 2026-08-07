@@ -19,6 +19,10 @@ pub struct DecodedSlot {
     pub cap_at_lh: Option<f64>,
     /// Effective cap limit used during decode (if applicable).
     pub effective_cap_limit: Option<f64>,
+    /// Effective chroma lower bound used during decode.
+    pub effective_chroma_min: f64,
+    /// Effective chroma upper bound used during decode.
+    pub effective_chroma_max: f64,
 }
 
 /// Returns latent dimensionality for a set of slots.
@@ -44,11 +48,29 @@ pub fn decode_slots_with_interpolation(
     image_cap: Option<&ImageCap>,
     cap_interpolation: CapInterpolation,
 ) -> Result<Vec<DecodedSlot>, PaletteError> {
+    let caps = vec![image_cap; slots.len()];
+    decode_slots_with_slot_caps(latent, slots, &caps, cap_interpolation)
+}
+
+/// Decodes all slots from a flat latent vector with per-slot cap surfaces.
+pub fn decode_slots_with_slot_caps(
+    latent: &[f64],
+    slots: &[SlotSpec],
+    slot_caps: &[Option<&ImageCap>],
+    cap_interpolation: CapInterpolation,
+) -> Result<Vec<DecodedSlot>, PaletteError> {
     let expected = latent_dim(slots.len());
     if latent.len() != expected {
         return Err(PaletteError::InvalidProblem(format!(
             "latent length mismatch: expected {expected}, got {}",
             latent.len()
+        )));
+    }
+    if slot_caps.len() != slots.len() {
+        return Err(PaletteError::InvalidProblem(format!(
+            "slot cap length mismatch: expected {}, got {}",
+            slots.len(),
+            slot_caps.len()
         )));
     }
 
@@ -60,7 +82,7 @@ pub fn decode_slots_with_interpolation(
             latent[base],
             latent[base + 1],
             latent[base + 2],
-            image_cap,
+            slot_caps[i],
             cap_interpolation,
         )?);
     }
@@ -123,7 +145,7 @@ pub fn decode_slot_with_interpolation(
             let c_min_eff = user_c_min.min(limit);
             (c_min_eff, limit, Some(limit))
         }
-        CapPolicy::SoftPenalty { .. } => (user_c_min, user_c_max, cap_at_lh),
+        CapPolicy::Statistical { .. } => (user_c_min, user_c_max, cap_at_lh),
     };
 
     let c_span = (c_max - c_min).max(0.0);
@@ -135,5 +157,7 @@ pub fn decode_slot_with_interpolation(
         lch,
         cap_at_lh,
         effective_cap_limit,
+        effective_chroma_min: c_min,
+        effective_chroma_max: c_max,
     })
 }

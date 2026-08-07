@@ -1,19 +1,19 @@
-use chromoxide::{
-    ChromaTargetTerm, CoverTerm, Interval, ScalarTarget, SupportTerm, Term, WeightedTerm,
-};
+use chromoxide::{CoverTerm, Interval, SupportTerm, Term, WeightedTerm};
 
 use super::common::{accent_slot, low_chroma_term, neutral_ladder_term, neutral_slot, weighted};
 use super::export::DirectExport;
+use super::priors;
 use super::recipe::BuiltinPalette;
 use crate::palette::Palette;
 use crate::solve_config::PartialSolveConfig;
 
 pub fn base16() -> Box<dyn Palette> {
-    Box::new(BuiltinPalette::new(
+    Box::new(BuiltinPalette::new_with_dynamic_terms(
         "base16",
         "Base16",
         slots(),
         terms(),
+        Some(priors::base16_terms),
         PartialSolveConfig {
             seed_count: Some(32),
             keep_top_k: Some(8),
@@ -239,18 +239,6 @@ fn terms() -> Vec<WeightedTerm> {
                 tau: 0.03,
                 beta: 0.10,
                 epsilon: 1.0e-4,
-            }),
-        ));
-        out.push(weighted(
-            &format!("{name}-chroma"),
-            3.0,
-            Term::ChromaTarget(ChromaTargetTerm {
-                slot,
-                target: ScalarTarget::Target {
-                    value: 1.0,
-                    delta: 0.20,
-                },
-                hinge_delta: Some(0.03),
             }),
         ));
     }

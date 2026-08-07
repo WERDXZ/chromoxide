@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use chromoxide::{
-    ChromaTargetTerm, CoverTerm, DeltaHTarget, Oklch, PairDeltaHTerm, PairDistanceTerm,
+    CoverTerm, DeltaHTarget, Oklch, PairDeltaHTerm, PairDistanceTerm, RelativeChromaTargetTerm,
     SaliencyTarget, SaliencyTerm, ScalarTarget, SlotSpec, Term, WeightedTerm,
 };
 
@@ -48,8 +48,8 @@ fn terms() -> Vec<WeightedTerm> {
         },
         salient_saliency_term(1, "salient-a-saliency"),
         salient_saliency_term(2, "salient-b-saliency"),
-        salient_chroma_term(1, "salient-a-max-chroma"),
-        salient_chroma_term(2, "salient-b-max-chroma"),
+        salient_relative_chroma_term(1, "salient-a-relative-chroma"),
+        salient_relative_chroma_term(2, "salient-b-relative-chroma"),
         WeightedTerm {
             weight: 3.0,
             name: Some("cover-salient-a-separation".into()),
@@ -103,6 +103,7 @@ fn salient_saliency_term(slot: usize, name: &str) -> WeightedTerm {
         term: Term::Saliency(SaliencyTerm {
             slot,
             sigma: 0.10,
+            support_scale: 0.05,
             target: SaliencyTarget::Target {
                 value: 1.0,
                 delta: 0.05,
@@ -112,17 +113,17 @@ fn salient_saliency_term(slot: usize, name: &str) -> WeightedTerm {
     }
 }
 
-fn salient_chroma_term(slot: usize, name: &str) -> WeightedTerm {
+fn salient_relative_chroma_term(slot: usize, name: &str) -> WeightedTerm {
     WeightedTerm {
         weight: 5.0,
         name: Some(name.into()),
-        term: Term::ChromaTarget(ChromaTargetTerm {
+        term: Term::RelativeChromaTarget(RelativeChromaTargetTerm {
             slot,
             target: ScalarTarget::Target {
-                value: 1.0,
-                delta: 0.20,
+                value: 0.90,
+                delta: 0.10,
             },
-            hinge_delta: Some(0.03),
+            hinge_delta: None,
         }),
     }
 }
@@ -170,9 +171,9 @@ impl BuiltinExport for CoverSalientExport {
 
 #[cfg(test)]
 mod tests {
-    use chromoxide::{ImageCapBuilder, Oklch};
+    use chromoxide::{ImageCapBuilder, Oklch, ScalarTarget, Term};
 
-    use super::{cover_salient, slots, CoverSalientExport};
+    use super::{CoverSalientExport, cover_salient, slots, terms};
     use crate::palette::builtin::export::BuiltinExport;
     use crate::solve_config::PartialSolveConfig;
 
@@ -254,6 +255,11 @@ mod tests {
         assert!(colors.contains_key("salient-1"));
         assert!(colors.contains_key("salient-2"));
         assert!(colors["salient-1"].h <= colors["salient-2"].h);
+        for color in colors.values() {
+            assert!(color.l.is_finite());
+            assert!(color.c.is_finite());
+            assert!(color.h.is_finite());
+        }
     }
 
     #[test]
@@ -267,5 +273,24 @@ mod tests {
                 "salient-2".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn accent_chroma_uses_relative_target_not_absolute_one() {
+        for wt in terms() {
+            if let Term::RelativeChromaTarget(t) = &wt.term
+                && let ScalarTarget::Target { value, .. } = &t.target
+            {
+                assert!((0.0..=1.0).contains(value));
+            }
+            assert!(
+                !matches!(
+                    &wt.term,
+                    Term::ChromaTarget(t)
+                        if matches!(&t.target, ScalarTarget::Target { value: 1.0, .. })
+                ),
+                "accent chroma must not be expressed as an absolute target of 1.0"
+            );
+        }
     }
 }

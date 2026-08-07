@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use chromoxide::{solve, ImageCap, Oklch, PaletteError, PaletteProblem, WeightedSample};
+use chromoxide::{ImageCap, Oklch, PaletteError, PaletteProblem, WeightedSample, solve};
 
 use crate::solve_config::PartialSolveConfig;
 

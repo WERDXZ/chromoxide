@@ -1,16 +1,19 @@
 use std::collections::HashMap;
 
-use chromoxide::{solve, ImageCap, Oklch, PaletteProblem, SlotSpec, WeightedSample, WeightedTerm};
+use chromoxide::{ImageCap, Oklch, PaletteProblem, SlotSpec, WeightedSample, WeightedTerm, solve};
 
 use super::export::BuiltinExport;
 use crate::palette::{Palette, SolveError};
 use crate::solve_config::PartialSolveConfig;
+
+type DynamicTermBuilder = fn(&[WeightedSample], &[SlotSpec]) -> Vec<WeightedTerm>;
 
 pub struct BuiltinPalette {
     id: &'static str,
     name: &'static str,
     slots: Vec<SlotSpec>,
     terms: Vec<WeightedTerm>,
+    dynamic_terms: Option<DynamicTermBuilder>,
     config: PartialSolveConfig,
     export: Box<dyn BuiltinExport>,
 }
@@ -24,11 +27,24 @@ impl BuiltinPalette {
         config: PartialSolveConfig,
         export: Box<dyn BuiltinExport>,
     ) -> Self {
+        Self::new_with_dynamic_terms(id, name, slots, terms, None, config, export)
+    }
+
+    pub fn new_with_dynamic_terms(
+        id: &'static str,
+        name: &'static str,
+        slots: Vec<SlotSpec>,
+        terms: Vec<WeightedTerm>,
+        dynamic_terms: Option<DynamicTermBuilder>,
+        config: PartialSolveConfig,
+        export: Box<dyn BuiltinExport>,
+    ) -> Self {
         Self {
             id,
             name,
             slots,
             terms,
+            dynamic_terms,
             config,
             export,
         }
@@ -41,11 +57,15 @@ impl BuiltinPalette {
         global_config: &PartialSolveConfig,
     ) -> Result<PaletteProblem, super::super::user::BuildProblemError> {
         let solve_config = self.config.resolve_over(global_config)?;
+        let mut terms = self.terms.clone();
+        if let Some(builder) = self.dynamic_terms {
+            terms.extend(builder(&samples, &self.slots));
+        }
         let problem = PaletteProblem {
             slots: self.slots.clone(),
             samples,
             image_cap,
-            terms: self.terms.clone(),
+            terms,
             config: solve_config,
         };
         problem.validate()?;

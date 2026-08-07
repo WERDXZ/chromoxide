@@ -48,7 +48,12 @@ pub fn export_samples(
                 "representatives must reference valid prepared pixels".to_string(),
             ));
         }
-        rep_labs.push(prepared.pixels[rep.pixel_index].lab);
+        if !rep.lab.l.is_finite() || !rep.lab.a.is_finite() || !rep.lab.b.is_finite() {
+            return Err(ImagePipelineError::Numeric(
+                "representative lab must be finite".to_string(),
+            ));
+        }
+        rep_labs.push(rep.lab);
     }
 
     let mut clusters = vec![ClusterAccum::default(); reps.len()];

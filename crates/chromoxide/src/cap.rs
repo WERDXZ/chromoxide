@@ -116,6 +116,48 @@ pub struct ImageCapDiagnostics {
     pub max_after_smooth: f64,
 }
 
+/// Parameters for building a statistical image cap from weighted samples.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StatisticalCapConfig {
+    /// Weighted percentile used per populated `(L, h)` cell.
+    pub percentile: f64,
+    /// Headroom multiplier applied after percentile estimation.
+    pub tolerance_factor: f64,
+    /// Blend factor in `[0, 1]` between unsmoothed and smoothed cap grids.
+    pub smoothing: f64,
+    /// Whether to suppress low-mass hue bins within each lightness row.
+    pub use_conditional_hue: bool,
+}
+
+impl StatisticalCapConfig {
+    /// Small conditional-hue mass threshold used to suppress incidental hue bins.
+    pub const CONDITIONAL_HUE_THRESHOLD: f64 = 0.02;
+
+    /// Validates config ranges.
+    pub fn validate(self) -> Result<(), PaletteError> {
+        if !self.percentile.is_finite()
+            || !(0.0..=1.0).contains(&self.percentile)
+            || self.percentile <= 0.0
+        {
+            return Err(PaletteError::InvalidProblem(
+                "statistical cap percentile must be finite and in (0, 1]".to_string(),
+            ));
+        }
+        if !self.tolerance_factor.is_finite() || self.tolerance_factor < 0.0 {
+            return Err(PaletteError::InvalidProblem(
+                "statistical cap tolerance_factor must be finite and >= 0".to_string(),
+            ));
+        }
+        if !self.smoothing.is_finite() || !(0.0..=1.0).contains(&self.smoothing) {
+            return Err(PaletteError::InvalidProblem(
+                "statistical cap smoothing must be finite and in [0, 1]".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// 2D grid approximation of `c_cap(L, h)`.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
@@ -261,6 +303,66 @@ impl ImageCapBuilder {
         self.build_from_oklab(|| samples.iter().map(|sample| sample.lab))
     }
 
+    /// Builds a statistical image cap from weighted samples.
+    ///
+    /// The grid is populated with a weighted percentile per `(L, h)` cell instead of the
+    /// absolute max chroma. Optional conditional-hue filtering blanks low-mass hue bins
+    /// within each lightness row before the usual hole filling and smoothing steps.
+    pub fn build_statistical(
+        &self,
+        samples: &[WeightedSample],
+        config: StatisticalCapConfig,
+    ) -> Result<ImageCap, PaletteError> {
+        config.validate()?;
+        self.validate_builder()?;
+        let sample_iter = || samples.iter().map(|sample| sample.lab);
+        let (l_min, l_max) = lightness_bounds(&sample_iter)?;
+        let l_span = (l_max - l_min).max(EPS);
+
+        let cell_count = self.n_l * self.n_h;
+        let mut cells = vec![Vec::<(f64, f64)>::new(); cell_count];
+        let mut hue_mass = vec![0.0; cell_count];
+        let mut row_mass = vec![0.0; self.n_l];
+
+        for sample in samples {
+            let lch = Oklch::from_oklab(sample.lab);
+            let li = (((lch.l - l_min) / l_span).clamp(0.0, 1.0) * (self.n_l - 1) as f64).floor()
+                as usize;
+            let hi = ((wrap_hue(lch.h) / TAU) * self.n_h as f64).floor() as usize % self.n_h;
+            let idx = li * self.n_h + hi;
+            let weight = sample.weight.max(0.0);
+            cells[idx].push((lch.c.max(0.0), weight));
+            hue_mass[idx] += weight;
+            row_mass[li] += weight;
+        }
+
+        let mut grid = vec![f64::NAN; cell_count];
+        for li in 0..self.n_l {
+            let row_total = row_mass[li];
+            for hi in 0..self.n_h {
+                let idx = li * self.n_h + hi;
+                if cells[idx].is_empty() {
+                    continue;
+                }
+                if config.use_conditional_hue && row_total > 0.0 {
+                    let hue_probability = hue_mass[idx] / row_total;
+                    if hue_probability < StatisticalCapConfig::CONDITIONAL_HUE_THRESHOLD {
+                        continue;
+                    }
+                }
+                grid[idx] = weighted_percentile(&mut cells[idx], config.percentile);
+            }
+        }
+
+        Ok(self.finish_grid(
+            grid,
+            config.tolerance_factor,
+            config.smoothing,
+            l_min,
+            l_max,
+        ))
+    }
+
     /// Builds an image cap from an Oklab iterator factory.
     ///
     /// `make_iter` is called twice (first for lightness range, then for binning),
@@ -270,38 +372,8 @@ impl ImageCapBuilder {
         F: Fn() -> I,
         I: Iterator<Item = Oklab>,
     {
-        if self.n_l < 2 || self.n_h < 2 {
-            return Err(PaletteError::InvalidProblem(
-                "image cap grid must be at least 2x2".to_string(),
-            ));
-        }
-        if !self.relax.is_finite() || self.relax <= 0.0 {
-            return Err(PaletteError::InvalidProblem(
-                "image cap relax must be finite and > 0".to_string(),
-            ));
-        }
-
-        let mut l_min = f64::INFINITY;
-        let mut l_max = f64::NEG_INFINITY;
-        let mut has_any = false;
-        for lab in make_iter() {
-            has_any = true;
-            l_min = l_min.min(lab.l);
-            l_max = l_max.max(lab.l);
-        }
-        if !has_any {
-            return Err(PaletteError::EmptySamples);
-        }
-
-        if !l_min.is_finite() || !l_max.is_finite() {
-            return Err(PaletteError::NumericInstability(
-                "non-finite sample lightness".to_string(),
-            ));
-        }
-        if (l_max - l_min).abs() < 1.0e-6 {
-            l_min = (l_min - 1.0e-3).max(0.0);
-            l_max = (l_max + 1.0e-3).min(1.0);
-        }
+        self.validate_builder()?;
+        let (l_min, l_max) = lightness_bounds(&make_iter)?;
 
         let mut grid = vec![f64::NAN; self.n_l * self.n_h];
         let l_span = (l_max - l_min).max(EPS);
@@ -318,6 +390,31 @@ impl ImageCapBuilder {
             }
         }
 
+        Ok(self.finish_grid(grid, self.relax - 1.0, 1.0, l_min, l_max))
+    }
+
+    fn validate_builder(&self) -> Result<(), PaletteError> {
+        if self.n_l < 2 || self.n_h < 2 {
+            return Err(PaletteError::InvalidProblem(
+                "image cap grid must be at least 2x2".to_string(),
+            ));
+        }
+        if !self.relax.is_finite() || self.relax <= 0.0 {
+            return Err(PaletteError::InvalidProblem(
+                "image cap relax must be finite and > 0".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn finish_grid(
+        &self,
+        mut grid: Vec<f64>,
+        tolerance_factor: f64,
+        smoothing: f64,
+        l_min: f64,
+        l_max: f64,
+    ) -> ImageCap {
         let empty_cells = grid.iter().filter(|v| v.is_nan()).count();
 
         hue_nearest_fill(&mut grid, self.n_l, self.n_h);
@@ -329,7 +426,7 @@ impl ImageCapBuilder {
         }
 
         let (mean_before_smooth, max_before_smooth) = stats(&grid);
-        let mut smoothed = grid;
+        let mut smoothed = grid.clone();
         if self.smooth_h_radius > 0 {
             smoothed = smooth_h(&smoothed, self.n_l, self.n_h, self.smooth_h_radius);
         }
@@ -337,12 +434,21 @@ impl ImageCapBuilder {
             smoothed = smooth_l(&smoothed, self.n_l, self.n_h, self.smooth_l_radius);
         }
 
+        let blend = smoothing.clamp(0.0, 1.0);
+        if blend < 1.0 {
+            for (base, smooth) in grid.iter_mut().zip(smoothed.iter()) {
+                *base = *base * (1.0 - blend) + *smooth * blend;
+            }
+            smoothed = grid;
+        }
+
+        let scale = (1.0 + tolerance_factor).max(0.0);
         for v in &mut smoothed {
-            *v = (*v * self.relax).max(0.0);
+            *v = (*v * scale).max(0.0);
         }
         let (mean_after_smooth, max_after_smooth) = stats(&smoothed);
 
-        Ok(ImageCap {
+        ImageCap {
             n_l: self.n_l,
             n_h: self.n_h,
             l_min,
@@ -355,8 +461,55 @@ impl ImageCapBuilder {
                 mean_after_smooth,
                 max_after_smooth,
             },
-        })
+        }
     }
+}
+
+fn lightness_bounds<F, I>(make_iter: &F) -> Result<(f64, f64), PaletteError>
+where
+    F: Fn() -> I,
+    I: Iterator<Item = Oklab>,
+{
+    let mut l_min = f64::INFINITY;
+    let mut l_max = f64::NEG_INFINITY;
+    let mut has_any = false;
+    for lab in make_iter() {
+        has_any = true;
+        l_min = l_min.min(lab.l);
+        l_max = l_max.max(lab.l);
+    }
+    if !has_any {
+        return Err(PaletteError::EmptySamples);
+    }
+
+    if !l_min.is_finite() || !l_max.is_finite() {
+        return Err(PaletteError::NumericInstability(
+            "non-finite sample lightness".to_string(),
+        ));
+    }
+    if (l_max - l_min).abs() < 1.0e-6 {
+        l_min = (l_min - 1.0e-3).max(0.0);
+        l_max = (l_max + 1.0e-3).min(1.0);
+    }
+    Ok((l_min, l_max))
+}
+
+fn weighted_percentile(samples: &mut [(f64, f64)], percentile: f64) -> f64 {
+    samples.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let total_weight: f64 = samples.iter().map(|(_, weight)| *weight).sum();
+    if total_weight <= EPS {
+        return samples.last().map_or(0.0, |(value, _)| *value);
+    }
+
+    let target = percentile * total_weight;
+    let mut accum = 0.0;
+    for (value, weight) in samples.iter().copied() {
+        accum += weight;
+        if accum + EPS >= target {
+            return value;
+        }
+    }
+    samples.last().map_or(0.0, |(value, _)| *value)
 }
 
 /// Returns `(mean, max)` summary for a cap grid.

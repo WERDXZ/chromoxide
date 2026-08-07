@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use phf::phf_map;
 
-use super::{builtin, user::PaletteFile, Palette};
+use super::{Palette, builtin, user::PaletteFile};
 
 pub type BuiltinFactory = fn() -> Box<dyn Palette>;
 

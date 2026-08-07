@@ -22,7 +22,10 @@ This file defines the main terms used across the workspace.
 - `objective` - the total weighted score being minimized
 - `local optimum` - a good solution within one basin, but not necessarily the global best across all seeds
 - `diagnostics` - extra solve metadata such as seed runs, objective breakdown, and slot stats
-- `estimated saliency` - saliency value inferred at a solved slot position from image samples
+- `estimated saliency` - effective saliency value inferred at a solved slot position from image samples
+- `conditional saliency` - mass-weighted RBF estimate of sample saliency at a query color, before any density gating
+- `support density` / `normalized support density` - total RBF kernel mass at a query color divided by total sample mass, measuring how much image support exists near that color
+- `effective saliency` - `conditional saliency * support-density gate`, the value used by `Saliency` terms and diagnostics
 
 ## Domain / constraint terms
 
@@ -32,9 +35,13 @@ This file defines the main terms used across the workspace.
 - `cap_policy` - how a slot interacts with the image cap
 - `Ignore` - slot ignores the image cap
 - `HardIntersect` - slot chroma is clamped to the cap during decode
-- `SoftPenalty` - slot may exceed the cap, but pays an objective penalty
-- `relax` - multiplier applied to the cap when using soft penalty
+- `Statistical` - slot uses a percentile-based chroma cap built from image samples and pays a penalty only when it exceeds that tolerant cap
+- `percentile` - weighted per-cell cutoff used when constructing a statistical cap surface
+- `tolerance_factor` - extra headroom applied after percentile estimation so isolated outliers do not dominate the cap
+- `conditional hue` - optional filtering that keeps the statistical cap tied to hue bins that are actually common at a given lightness
 - `neutralish` - a slot/domain with very small allowed chroma, effectively near-neutral
+
+Respecting the original image means solved slot chroma stays inside, or only slightly above, the empirical `c_cap(L, h)` volume supported by the source image rather than borrowing chroma from unrelated lightness or hue regions.
 
 ## Palette model
 
@@ -66,10 +73,13 @@ This file defines the main terms used across the workspace.
 - `export` - conversion from sampled/clustered image evidence into `WeightedSample`s
 - `weighted sample` - one support color with a weight and saliency score
 - `image cap` / `cap` - image-derived chroma limit used to keep solutions plausible for the source image
+- `relative chroma` - chroma normalized to a slot's effective decode interval: `(C - lo) / (hi - lo)`, used by `RelativeChromaTarget`
+- `representative anchor` - the real pixel index attached to a representative/cluster; it validates provenance but is not necessarily the assignment center
+- `cluster center` - the Oklab color used for assignment and export (a Lloyd centroid or medoid), which may differ from the anchor pixel's color
 
 ## Term families
 
-- `Cover` - encourages slots to explain broad cover colors in the image
+- `Cover` - encourages slots to explain broad cover colors in the image using soft-assignment expected squared distance
 - `Support` - biases slots toward high-support image evidence
 - `Saliency` - biases slots toward visually prominent image regions
 - `LightnessTarget` / `ChromaTarget` / `HueTarget` - unary preferences on a single slot
@@ -78,6 +88,7 @@ This file defines the main terms used across the workspace.
 - `Order` - pairwise ordering preference, such as one slot being brighter than another
 - `Contrast` - text/background contrast preference
 - `GroupQuantile` - structured ladder/quantile target over a group of slots
+- `RelativeChromaTarget` - unary preference on a slot's relative chroma inside its feasible interval
 
 ## CLI/template terms
 

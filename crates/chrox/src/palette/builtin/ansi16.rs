@@ -1,20 +1,22 @@
 use chromoxide::{
-    ChromaTargetTerm, ContrastTerm, CoverTerm, Interval, OrderRelation, PairOrderTerm,
+    ContrastTerm, CoverTerm, Interval, LightnessTargetTerm, OrderRelation, PairOrderTerm,
     ScalarTarget, SupportTerm, Term, WeightedTerm,
 };
 
 use super::common::{accent_slot, low_chroma_term, neutral_ladder_term, neutral_slot, weighted};
 use super::export::DirectExport;
+use super::priors;
 use super::recipe::BuiltinPalette;
 use crate::palette::Palette;
 use crate::solve_config::PartialSolveConfig;
 
 pub fn ansi_16() -> Box<dyn Palette> {
-    Box::new(BuiltinPalette::new(
+    Box::new(BuiltinPalette::new_with_dynamic_terms(
         "ansi-16",
         "ANSI 16",
         slots(),
         terms(),
+        Some(priors::ansi16_terms),
         PartialSolveConfig {
             seed_count: Some(28),
             keep_top_k: Some(8),
@@ -39,8 +41,8 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             340.0,
             45.0,
             Interval {
-                min: 0.35,
-                max: 0.68,
+                min: 0.50,
+                max: 0.66,
             },
             Interval {
                 min: 0.08,
@@ -52,8 +54,8 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             110.0,
             55.0,
             Interval {
-                min: 0.35,
-                max: 0.68,
+                min: 0.60,
+                max: 0.78,
             },
             Interval {
                 min: 0.08,
@@ -65,8 +67,8 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             70.0,
             40.0,
             Interval {
-                min: 0.55,
-                max: 0.84,
+                min: 0.66,
+                max: 0.86,
             },
             Interval {
                 min: 0.07,
@@ -78,8 +80,8 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             225.0,
             60.0,
             Interval {
-                min: 0.35,
-                max: 0.70,
+                min: 0.50,
+                max: 0.66,
             },
             Interval {
                 min: 0.08,
@@ -91,8 +93,8 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             285.0,
             55.0,
             Interval {
-                min: 0.35,
-                max: 0.72,
+                min: 0.52,
+                max: 0.68,
             },
             Interval {
                 min: 0.08,
@@ -104,7 +106,7 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             165.0,
             60.0,
             Interval {
-                min: 0.40,
+                min: 0.56,
                 max: 0.74,
             },
             Interval {
@@ -133,8 +135,8 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             340.0,
             45.0,
             Interval {
-                min: 0.48,
-                max: 0.80,
+                min: 0.52,
+                max: 0.68,
             },
             Interval {
                 min: 0.10,
@@ -146,7 +148,7 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             110.0,
             55.0,
             Interval {
-                min: 0.50,
+                min: 0.62,
                 max: 0.80,
             },
             Interval {
@@ -160,7 +162,7 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             40.0,
             Interval {
                 min: 0.68,
-                max: 0.92,
+                max: 0.88,
             },
             Interval {
                 min: 0.08,
@@ -172,8 +174,8 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             225.0,
             60.0,
             Interval {
-                min: 0.48,
-                max: 0.82,
+                min: 0.52,
+                max: 0.68,
             },
             Interval {
                 min: 0.10,
@@ -185,8 +187,8 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             285.0,
             55.0,
             Interval {
-                min: 0.50,
-                max: 0.82,
+                min: 0.54,
+                max: 0.70,
             },
             Interval {
                 min: 0.10,
@@ -198,8 +200,8 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             165.0,
             60.0,
             Interval {
-                min: 0.54,
-                max: 0.84,
+                min: 0.58,
+                max: 0.76,
             },
             Interval {
                 min: 0.08,
@@ -279,40 +281,58 @@ fn terms() -> Vec<WeightedTerm> {
             }),
         ));
         out.push(weighted(
-            &format!("{name}-regular-chroma"),
+            &format!("{name}-regular-lightness"),
             3.0,
-            Term::ChromaTarget(ChromaTargetTerm {
+            Term::LightnessTarget(LightnessTargetTerm {
                 slot: regular,
                 target: ScalarTarget::Target {
-                    value: 1.0,
-                    delta: 0.20,
+                    value: accent_lightness_target(name, false),
+                    delta: 0.035,
                 },
-                hinge_delta: Some(0.03),
+                hinge_delta: None,
             }),
         ));
         out.push(weighted(
-            &format!("{name}-bright-chroma"),
-            3.0,
-            Term::ChromaTarget(ChromaTargetTerm {
+            &format!("{name}-bright-lightness"),
+            1.8,
+            Term::LightnessTarget(LightnessTargetTerm {
                 slot: bright,
                 target: ScalarTarget::Target {
-                    value: 1.0,
-                    delta: 0.20,
+                    value: accent_lightness_target(name, false) + 0.015,
+                    delta: 0.035,
                 },
-                hinge_delta: Some(0.03),
+                hinge_delta: None,
             }),
         ));
         out.push(weighted(
             &format!("{name}-bright-order"),
-            3.0,
+            1.2,
             Term::Order(PairOrderTerm {
                 a: bright,
                 b: regular,
-                relation: OrderRelation::BrighterBy { delta: 0.08 },
-                hinge_delta: Some(0.04),
+                relation: OrderRelation::BrighterBy { delta: 0.015 },
+                hinge_delta: Some(0.02),
             }),
         ));
     }
 
     out
+}
+
+fn accent_lightness_target(name: &str, light: bool) -> f64 {
+    match (light, name) {
+        (false, "red") => 0.59,
+        (false, "green") => 0.68,
+        (false, "yellow") => 0.72,
+        (false, "blue") => 0.59,
+        (false, "magenta") => 0.60,
+        (false, "cyan") => 0.65,
+        (true, "red") => 0.57,
+        (true, "green") => 0.62,
+        (true, "yellow") => 0.69,
+        (true, "blue") => 0.58,
+        (true, "magenta") => 0.59,
+        (true, "cyan") => 0.63,
+        _ => 0.60,
+    }
 }

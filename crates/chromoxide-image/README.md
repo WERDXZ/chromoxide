@@ -29,6 +29,7 @@ This crate handles image I/O and support extraction. It does **not** implement:
   - `Stratified`
   - `RandomUniform`
   - `FarthestPointLab`
+  - `KMeansPlusPlusLab`
 - assignment/export to `WeightedSample`
 - optional `ImageCap` build via `chromoxide::ImageCapBuilder`
 - diagnostics and saliency debug rendering (`saliency_to_luma_image`)

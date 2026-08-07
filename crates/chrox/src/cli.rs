@@ -2,9 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use clap::{Parser, Subcommand};
 use chromoxide::convert::{oklab_to_linear_srgb, relative_luminance};
 use chromoxide_image::prepare_support_from_path;
+use clap::{Parser, Subcommand};
 
 use crate::config::Config;
 use crate::filter;
@@ -186,12 +186,12 @@ pub fn run(args: Args) -> Result<(), Error> {
             let support = prepare_support_from_path(&image, &ctx.config.image)?;
 
             for (idx, palette_id) in palette_ids.iter().enumerate() {
-                let record = ctx
-                    .registry
-                    .resolve(palette_id)
-                    .ok_or_else(|| Error::PaletteNotFound {
-                        id: palette_id.clone(),
-                    })?;
+                let record =
+                    ctx.registry
+                        .resolve(palette_id)
+                        .ok_or_else(|| Error::PaletteNotFound {
+                            id: palette_id.clone(),
+                        })?;
 
                 let rendered = match record {
                     PaletteRecordRef::User(record) => {
@@ -245,7 +245,11 @@ pub fn run(args: Args) -> Result<(), Error> {
     }
 }
 
-fn render_mode(image_path: PathBuf, ctx: &RunContext, config_path: Option<&PathBuf>) -> Result<(), Error> {
+fn render_mode(
+    image_path: PathBuf,
+    ctx: &RunContext,
+    config_path: Option<&PathBuf>,
+) -> Result<(), Error> {
     if ctx.config.templates.is_empty() {
         return Err(Error::NoTemplates);
     }
@@ -276,7 +280,12 @@ fn render_mode(image_path: PathBuf, ctx: &RunContext, config_path: Option<&PathB
             .ok_or_else(|| Error::PaletteNotFound {
                 id: palette_id.clone(),
             })?;
-        let colors = solve_palette_record(record, &support.samples, support.image_cap.clone(), &ctx.config.config)?;
+        let colors = solve_palette_record(
+            record,
+            &support.samples,
+            support.image_cap.clone(),
+            &ctx.config.config,
+        )?;
         solved.insert(palette_id, colors);
     }
 
@@ -303,7 +312,10 @@ fn render_mode(image_path: PathBuf, ctx: &RunContext, config_path: Option<&PathB
     Ok(())
 }
 
-fn validate_template_references(engine: &TemplateEngine, registry: &PaletteRegistry) -> Result<(), Error> {
+fn validate_template_references(
+    engine: &TemplateEngine,
+    registry: &PaletteRegistry,
+) -> Result<(), Error> {
     for (_, source_index, template) in engine.iter_templates() {
         let source = engine.source(source_index).ok_or(Error::Internal {
             message: "template source missing from template engine",
@@ -312,10 +324,15 @@ fn validate_template_references(engine: &TemplateEngine, registry: &PaletteRegis
         let member_name = template.member_name(source);
         let filter_name = template.filter_name(source).unwrap_or("hex");
 
-        let record = registry.resolve(palette_name).ok_or_else(|| Error::PaletteNotFound {
-            id: palette_name.to_string(),
-        })?;
-        if !palette_members(record).iter().any(|member| member == member_name) {
+        let record = registry
+            .resolve(palette_name)
+            .ok_or_else(|| Error::PaletteNotFound {
+                id: palette_name.to_string(),
+            })?;
+        if !palette_members(record)
+            .iter()
+            .any(|member| member == member_name)
+        {
             return Err(Error::MissingPaletteMember {
                 palette: palette_name.to_string(),
                 member: member_name.to_string(),
@@ -364,7 +381,10 @@ fn solve_palette_record(
 fn render_template_source(
     source: &crate::template::TemplateSource,
     engine: &TemplateEngine,
-    palettes: &std::collections::HashMap<String, std::collections::HashMap<String, chromoxide::Oklch>>,
+    palettes: &std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, chromoxide::Oklch>,
+    >,
 ) -> Result<String, Error> {
     let mut out = String::with_capacity(source.content().len());
     for token in source.tokens() {
@@ -377,16 +397,22 @@ fn render_template_source(
                 let palette_name = template.palette_name(source);
                 let member_name = template.member_name(source);
                 let filter_name = template.filter_name(source).unwrap_or("hex");
-                let palette = palettes.get(palette_name).ok_or_else(|| Error::PaletteNotFound {
-                    id: palette_name.to_string(),
-                })?;
-                let color = palette.get(member_name).ok_or_else(|| Error::MissingPaletteMember {
-                    palette: palette_name.to_string(),
-                    member: member_name.to_string(),
-                })?;
-                let rendered = filter::apply(filter_name, *color).ok_or_else(|| Error::UnsupportedFilter {
-                    name: filter_name.to_string(),
-                })?;
+                let palette = palettes
+                    .get(palette_name)
+                    .ok_or_else(|| Error::PaletteNotFound {
+                        id: palette_name.to_string(),
+                    })?;
+                let color =
+                    palette
+                        .get(member_name)
+                        .ok_or_else(|| Error::MissingPaletteMember {
+                            palette: palette_name.to_string(),
+                            member: member_name.to_string(),
+                        })?;
+                let rendered =
+                    filter::apply(filter_name, *color).ok_or_else(|| Error::UnsupportedFilter {
+                        name: filter_name.to_string(),
+                    })?;
                 out.push_str(&rendered);
             }
         }
@@ -514,7 +540,10 @@ struct RenderJob {
     source: crate::template::SourceIndex,
 }
 
-fn load_context(config_path: Option<&PathBuf>, cli_palettes: &[PathBuf]) -> Result<RunContext, Error> {
+fn load_context(
+    config_path: Option<&PathBuf>,
+    cli_palettes: &[PathBuf],
+) -> Result<RunContext, Error> {
     if let Some(cfg) = config_path
         && !cfg.exists()
     {
@@ -607,15 +636,9 @@ mod tests {
 
     #[test]
     fn parse_palettes_supports_comma_and_repeat() {
-        let args = Args::try_parse_from([
-            "chrox",
-            "image.png",
-            "--palettes",
-            "a,b",
-            "--palettes",
-            "c",
-        ])
-        .expect("args should parse");
+        let args =
+            Args::try_parse_from(["chrox", "image.png", "--palettes", "a,b", "--palettes", "c"])
+                .expect("args should parse");
 
         assert_eq!(args.image, Some(PathBuf::from("image.png")));
         assert_eq!(
@@ -626,15 +649,9 @@ mod tests {
 
     #[test]
     fn subcommand_accepts_global_config_and_palettes() {
-        let args = Args::try_parse_from([
-            "chrox",
-            "list",
-            "--config",
-            "cfg.toml",
-            "--palettes",
-            "a,b",
-        ])
-        .expect("args should parse");
+        let args =
+            Args::try_parse_from(["chrox", "list", "--config", "cfg.toml", "--palettes", "a,b"])
+                .expect("args should parse");
 
         assert!(matches!(args.command, Some(Commands::List)));
         assert_eq!(args.config, Some(PathBuf::from("cfg.toml")));
@@ -643,8 +660,9 @@ mod tests {
 
     #[test]
     fn test_subcommand_parses_palettes_and_image_after_double_dash() {
-        let args = Args::try_parse_from(["chrox", "test", "cover-salient", "base16", "--", "wall.png"])
-            .expect("args should parse");
+        let args =
+            Args::try_parse_from(["chrox", "test", "cover-salient", "base16", "--", "wall.png"])
+                .expect("args should parse");
 
         match args.command {
             Some(Commands::Test { palette_ids, image }) => {
@@ -803,7 +821,8 @@ palettes = ["palettes"]
         let config_path = dir.join("config.toml");
         let template_path = templates_dir.join("bad.txt");
         write_test_image(&image_path);
-        std::fs::write(&template_path, "x={{base16.nope|hex}}\n").expect("template should be written");
+        std::fs::write(&template_path, "x={{base16.nope|hex}}\n")
+            .expect("template should be written");
         std::fs::write(
             &config_path,
             r#"
@@ -823,7 +842,9 @@ output = "out/bad.txt"
         })
         .expect_err("missing member should fail");
 
-        assert!(matches!(err, Error::MissingPaletteMember { palette, member } if palette == "base16" && member == "nope"));
+        assert!(
+            matches!(err, Error::MissingPaletteMember { palette, member } if palette == "base16" && member == "nope")
+        );
 
         let _ = std::fs::remove_file(config_path);
         let _ = std::fs::remove_dir_all(dir);
@@ -839,7 +860,8 @@ output = "out/bad.txt"
         let config_path = dir.join("config.toml");
         let template_path = templates_dir.join("bad-filter.txt");
         write_test_image(&image_path);
-        std::fs::write(&template_path, "x={{base16.base00|wat}}\n").expect("template should be written");
+        std::fs::write(&template_path, "x={{base16.base00|wat}}\n")
+            .expect("template should be written");
         std::fs::write(
             &config_path,
             r#"
@@ -867,7 +889,10 @@ output = "out/bad-filter.txt"
 
     #[test]
     fn config_base_dir_uses_parent_or_dot() {
-        assert_eq!(config_base_dir(Some(&PathBuf::from("config.toml"))), Path::new("."));
+        assert_eq!(
+            config_base_dir(Some(&PathBuf::from("config.toml"))),
+            Path::new(".")
+        );
         assert_eq!(
             config_base_dir(Some(&PathBuf::from("cfg/chrox.toml"))),
             Path::new("cfg")
@@ -918,8 +943,8 @@ output = "out/bad-filter.txt"
             },
         );
 
-        let output =
-            format_palette_output("cover-salient", "Cover + Salient", &colors).expect("format should succeed");
+        let output = format_palette_output("cover-salient", "Cover + Salient", &colors)
+            .expect("format should succeed");
         let lines = output.lines().collect::<Vec<_>>();
 
         assert_eq!(lines[0], "palette: cover-salient");

@@ -32,8 +32,14 @@ fn export_samples_normalized_weight_sum_is_one() {
     let saliency = compute_saliency(&prepared, &SaliencyConfig::default()).unwrap();
 
     let reps = vec![
-        Representative { pixel_index: 1 },
-        Representative { pixel_index: 6 },
+        Representative {
+            pixel_index: 1,
+            lab: prepared.pixels[1].lab,
+        },
+        Representative {
+            pixel_index: 6,
+            lab: prepared.pixels[6].lab,
+        },
     ];
 
     let samples = export_samples(

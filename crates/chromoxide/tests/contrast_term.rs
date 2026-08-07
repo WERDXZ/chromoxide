@@ -28,6 +28,8 @@ fn contrast_term_behaves_as_expected() {
         slots_lch: &bw_lch,
         luminance: &bw_y,
         hue_gates: &[1.0, 1.0],
+        chroma_lower_bounds: &[0.0, 0.0],
+        chroma_upper_bounds: &[1.0, 1.0],
         samples: &[],
     };
 
@@ -62,6 +64,8 @@ fn contrast_term_behaves_as_expected() {
         slots_lch: &gray_lch,
         luminance: &gray_y,
         hue_gates: &[1.0, 1.0],
+        chroma_lower_bounds: &[0.0, 0.0],
+        chroma_upper_bounds: &[1.0, 1.0],
         samples: &[],
     };
     let gray_loss = eval_contrast(&term, &gray_ctx).raw;
@@ -100,6 +104,8 @@ fn hue_gate_suppresses_delta_h_at_low_chroma() {
         slots_lch: &lchs,
         luminance: &ys,
         hue_gates: &[1.0, 1.0],
+        chroma_lower_bounds: &[0.0, 0.0],
+        chroma_upper_bounds: &[1.0, 1.0],
         samples: &[],
     };
     let gated_ctx = EvalContext {
@@ -107,6 +113,8 @@ fn hue_gate_suppresses_delta_h_at_low_chroma() {
         slots_lch: &lchs,
         luminance: &ys,
         hue_gates: &[0.05, 0.05],
+        chroma_lower_bounds: &[0.0, 0.0],
+        chroma_upper_bounds: &[1.0, 1.0],
         samples: &[],
     };
 

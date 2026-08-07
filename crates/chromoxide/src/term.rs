@@ -18,6 +18,10 @@ pub struct EvalContext<'a> {
     pub luminance: &'a [f64],
     /// Hue reliability gates per slot.
     pub hue_gates: &'a [f64],
+    /// Effective lower chroma bound per slot (used by relative chroma terms).
+    pub chroma_lower_bounds: &'a [f64],
+    /// Effective upper chroma bound per slot (used by relative chroma terms).
+    pub chroma_upper_bounds: &'a [f64],
     /// Support samples.
     pub samples: &'a [WeightedSample],
 }
@@ -95,6 +99,14 @@ pub enum SaliencyTarget {
     Target { value: f64, delta: f64 },
 }
 
+/// Default support-density gate scale for saliency estimation.
+pub const DEFAULT_SALIENCY_SUPPORT_SCALE: f64 = 0.05;
+
+#[cfg(feature = "serde")]
+fn default_saliency_support_scale() -> f64 {
+    DEFAULT_SALIENCY_SUPPORT_SCALE
+}
+
 /// Saliency term.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
@@ -106,6 +118,12 @@ pub struct SaliencyTerm {
     /// Smaller values make saliency estimation local and selective.
     /// Larger values smooth saliency over wider color neighborhoods.
     pub sigma: f64,
+    /// Support-density gate scale.
+    ///
+    /// Controls how quickly the effective saliency is suppressed when the
+    /// normalized support density at a query color is low.
+    #[cfg_attr(feature = "serde", serde(default = "default_saliency_support_scale"))]
+    pub support_scale: f64,
     /// Target type.
     pub target: SaliencyTarget,
     /// Optional pseudo-Huber delta used only for hinge-style targets.
@@ -285,6 +303,23 @@ pub struct ChromaTargetTerm {
     ///
     /// This affects `Min`, `Max`, and `Range`, but does not affect
     /// `Target { value, delta }`.
+    pub hinge_delta: Option<f64>,
+}
+
+/// Relative chroma preference for a single slot.
+///
+/// The value is the position of the slot's chroma inside its effective
+/// `[chroma_lower_bounds, chroma_upper_bounds]` interval, normalized to
+/// `[0, 1]`. This is the correct way to express "as chromatic as the slot's
+/// feasible interval allows" without hard-coding an absolute chroma target.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug)]
+pub struct RelativeChromaTargetTerm {
+    /// Slot index.
+    pub slot: usize,
+    /// Scalar target applied to the relative chroma ratio in `[0, 1]`.
+    pub target: ScalarTarget,
+    /// Optional pseudo-Huber delta used only for hinge-style targets.
     pub hinge_delta: Option<f64>,
 }
 
@@ -473,6 +508,8 @@ pub enum Term {
     LightnessTarget(LightnessTargetTerm),
     /// Unary chroma target term.
     ChromaTarget(ChromaTargetTerm),
+    /// Relative (interval-normalized) chroma target term.
+    RelativeChromaTarget(RelativeChromaTargetTerm),
     /// Unary hue target term.
     HueTarget(HueTargetTerm),
     /// Pair delta-L term.
@@ -500,6 +537,7 @@ impl Term {
             Term::Saliency(t) => crate::terms::saliency::evaluate(t, ctx),
             Term::LightnessTarget(t) => crate::terms::lightness_target::evaluate(t, ctx),
             Term::ChromaTarget(t) => crate::terms::chroma_target::evaluate(t, ctx),
+            Term::RelativeChromaTarget(t) => crate::terms::relative_chroma_target::evaluate(t, ctx),
             Term::HueTarget(t) => crate::terms::hue_target::evaluate(t, ctx),
             Term::DeltaL(t) => crate::terms::pair_delta::evaluate_delta_l(t, ctx),
             Term::DeltaC(t) => crate::terms::pair_delta::evaluate_delta_c(t, ctx),
@@ -519,6 +557,7 @@ impl Term {
             Term::Saliency(_) => "saliency",
             Term::LightnessTarget(_) => "lightness_target",
             Term::ChromaTarget(_) => "chroma_target",
+            Term::RelativeChromaTarget(_) => "relative_chroma_target",
             Term::HueTarget(_) => "hue_target",
             Term::DeltaL(_) => "delta_l",
             Term::DeltaC(_) => "delta_c",

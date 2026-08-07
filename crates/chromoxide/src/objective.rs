@@ -1,14 +1,15 @@
 //! Objective evaluation and finite-difference gradients.
 
 use crate::convert::{oklab_to_linear_srgb, relative_luminance};
-use crate::decode::{DecodedSlot, decode_slots_with_interpolation};
+use crate::decode::{DecodedSlot, decode_slots_with_slot_caps};
 use crate::diagnostics::TermBreakdown;
 use crate::domain::CapPolicy;
 use crate::error::PaletteError;
 use crate::problem::PaletteProblem;
 use crate::term::EvalContext;
-use crate::terms::saliency::estimate_saliency_at;
+use crate::terms::saliency::estimate_saliency_components_at;
 use crate::util::{l2_norm, pseudo_huber, relu, smoothstep01};
+use crate::{ImageCap, ImageCapBuilder, StatisticalCapConfig};
 
 /// Cached decoded palette and precomputed fields.
 #[derive(Clone, Debug)]
@@ -28,12 +29,16 @@ pub struct DecodedPalette {
 pub struct ObjectiveEvaluator<'a> {
     /// Problem reference.
     pub problem: &'a PaletteProblem,
+    statistical_caps: Vec<Option<ImageCap>>,
 }
 
 impl<'a> ObjectiveEvaluator<'a> {
     /// Creates a new evaluator.
-    pub fn new(problem: &'a PaletteProblem) -> Self {
-        Self { problem }
+    pub fn new(problem: &'a PaletteProblem) -> Result<Self, PaletteError> {
+        Ok(Self {
+            problem,
+            statistical_caps: build_statistical_caps(problem)?,
+        })
     }
 
     /// Decodes latent vector and computes precomputed fields.
@@ -41,10 +46,11 @@ impl<'a> ObjectiveEvaluator<'a> {
     /// Precomputed fields include relative luminance, hue reliability gates,
     /// and optional saliency estimates used in diagnostics.
     pub fn decode_palette(&self, latent: &[f64]) -> Result<DecodedPalette, PaletteError> {
-        let decoded = decode_slots_with_interpolation(
+        let slot_caps = self.slot_caps();
+        let decoded = decode_slots_with_slot_caps(
             latent,
             &self.problem.slots,
-            self.problem.image_cap.as_ref(),
+            &slot_caps,
             self.problem.config.cap_interpolation,
         )?;
 
@@ -52,7 +58,7 @@ impl<'a> ObjectiveEvaluator<'a> {
         let mut hue_gates = Vec::with_capacity(decoded.len());
         let mut estimated_saliency = Vec::with_capacity(decoded.len());
 
-        let slot_sigmas = self.infer_saliency_sigmas();
+        let saliency_params = self.infer_saliency_params();
         for (i, slot) in decoded.iter().enumerate() {
             let y = relative_luminance(oklab_to_linear_srgb(slot.lab));
             luminance.push(y);
@@ -65,8 +71,14 @@ impl<'a> ObjectiveEvaluator<'a> {
             };
             hue_gates.push(gate);
 
-            let sigma = slot_sigmas[i];
-            estimated_saliency.push(estimate_saliency_at(slot.lab, &self.problem.samples, sigma));
+            let params = saliency_params[i];
+            let est = estimate_saliency_components_at(
+                slot.lab,
+                &self.problem.samples,
+                params.sigma,
+                params.support_scale,
+            );
+            estimated_saliency.push(est.effective);
         }
 
         Ok(DecodedPalette {
@@ -80,7 +92,7 @@ impl<'a> ObjectiveEvaluator<'a> {
     /// Evaluates objective and returns breakdown with decoded palette.
     ///
     /// This includes explicit weighted term contributions and optional
-    /// soft-cap penalties (when `CapPolicy::SoftPenalty` is configured).
+    /// statistical-cap penalties (when `CapPolicy::Statistical` is configured).
     pub fn evaluate_breakdown(
         &self,
         latent: &[f64],
@@ -89,11 +101,23 @@ impl<'a> ObjectiveEvaluator<'a> {
 
         let labs: Vec<_> = decoded.slots.iter().map(|s| s.lab).collect();
         let lchs: Vec<_> = decoded.slots.iter().map(|s| s.lch).collect();
+        let chroma_lower_bounds: Vec<_> = decoded
+            .slots
+            .iter()
+            .map(|s| s.effective_chroma_min)
+            .collect();
+        let chroma_upper_bounds: Vec<_> = decoded
+            .slots
+            .iter()
+            .map(|s| s.effective_chroma_max)
+            .collect();
         let ctx = EvalContext {
             slots_lab: &labs,
             slots_lch: &lchs,
             luminance: &decoded.luminance,
             hue_gates: &decoded.hue_gates,
+            chroma_lower_bounds: &chroma_lower_bounds,
+            chroma_upper_bounds: &chroma_upper_bounds,
             samples: &self.problem.samples,
         };
 
@@ -121,33 +145,36 @@ impl<'a> ObjectiveEvaluator<'a> {
         }
 
         for (i, slot_spec) in self.problem.slots.iter().enumerate() {
-            if let CapPolicy::SoftPenalty { weight, relax } = slot_spec.domain.cap_policy {
+            if let CapPolicy::Statistical {
+                tolerance_factor,
+                penalty_weight,
+                ..
+            } = slot_spec.domain.cap_policy
+            {
                 let cap = self
-                    .problem
-                    .image_cap
-                    .as_ref()
+                    .slot_cap_ref(i)
                     .ok_or_else(|| {
                         PaletteError::InvalidProblem(
-                            "SoftPenalty requires image_cap to be present".to_string(),
+                            "Statistical cap requires a prepared cap surface".to_string(),
                         )
                     })?
                     .query_with(
                         decoded.slots[i].lch.l,
                         decoded.slots[i].lch.h,
                         self.problem.config.cap_interpolation,
-                    )
-                    * relax;
+                    );
                 let overflow = relu(decoded.slots[i].lch.c - cap);
-                let raw = pseudo_huber(overflow, 0.02);
-                let weighted = raw * weight;
+                let huber_delta = 0.02 * (1.0 + tolerance_factor.max(0.0));
+                let raw = pseudo_huber(overflow, huber_delta);
+                let weighted = raw * penalty_weight;
                 if !weighted.is_finite() {
                     return Err(PaletteError::NumericInstability(
-                        "non-finite soft cap value".to_string(),
+                        "non-finite statistical cap value".to_string(),
                     ));
                 }
                 total += weighted;
                 breakdown.push(TermBreakdown {
-                    name: format!("soft_cap/{}", slot_spec.name),
+                    name: format!("statistical_cap/{}", slot_spec.name),
                     raw,
                     weighted,
                     components: vec![overflow, cap],
@@ -208,14 +235,87 @@ impl<'a> ObjectiveEvaluator<'a> {
         Ok(l2_norm(&g))
     }
 
-    /// Infers per-slot saliency kernel sigma from configured saliency terms.
-    fn infer_saliency_sigmas(&self) -> Vec<f64> {
-        let mut sigmas = vec![0.08; self.problem.slots.len()];
+    /// Infers per-slot saliency kernel parameters from configured saliency terms.
+    fn infer_saliency_params(&self) -> Vec<SaliencyParams> {
+        let mut params = vec![
+            SaliencyParams {
+                sigma: 0.08,
+                support_scale: 0.05,
+            };
+            self.problem.slots.len()
+        ];
         for wt in &self.problem.terms {
             if let crate::term::Term::Saliency(t) = &wt.term {
-                sigmas[t.slot] = t.sigma.max(1.0e-6);
+                params[t.slot] = SaliencyParams {
+                    sigma: t.sigma.max(1.0e-6),
+                    support_scale: t.support_scale.max(1.0e-12),
+                };
             }
         }
-        sigmas
+        params
+    }
+
+    fn slot_cap_ref(&self, index: usize) -> Option<&ImageCap> {
+        self.statistical_caps[index]
+            .as_ref()
+            .or(self.problem.image_cap.as_ref())
+    }
+
+    fn slot_caps(&self) -> Vec<Option<&ImageCap>> {
+        (0..self.problem.slots.len())
+            .map(|index| self.slot_cap_ref(index))
+            .collect()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SaliencyParams {
+    sigma: f64,
+    support_scale: f64,
+}
+
+fn build_statistical_caps(problem: &PaletteProblem) -> Result<Vec<Option<ImageCap>>, PaletteError> {
+    let mut cache: Vec<(StatisticalCapConfig, ImageCap)> = Vec::new();
+    let mut caps = Vec::with_capacity(problem.slots.len());
+
+    for slot in &problem.slots {
+        let Some(config) = statistical_cap_config(slot.domain.cap_policy) else {
+            caps.push(None);
+            continue;
+        };
+
+        if let Some((_, cap)) = cache.iter().find(|(cached, _)| *cached == config) {
+            caps.push(Some(cap.clone()));
+            continue;
+        }
+
+        let mut builder = ImageCapBuilder::default();
+        if let Some(reference) = problem.image_cap.as_ref() {
+            builder.n_l = reference.n_l;
+            builder.n_h = reference.n_h;
+        }
+        let cap = builder.build_statistical(&problem.samples, config)?;
+        cache.push((config, cap.clone()));
+        caps.push(Some(cap));
+    }
+
+    Ok(caps)
+}
+
+fn statistical_cap_config(policy: CapPolicy) -> Option<StatisticalCapConfig> {
+    match policy {
+        CapPolicy::Statistical {
+            percentile,
+            tolerance_factor,
+            smoothing,
+            use_conditional_hue,
+            ..
+        } => Some(StatisticalCapConfig {
+            percentile,
+            tolerance_factor,
+            smoothing,
+            use_conditional_hue,
+        }),
+        CapPolicy::Ignore | CapPolicy::HardIntersect => None,
     }
 }

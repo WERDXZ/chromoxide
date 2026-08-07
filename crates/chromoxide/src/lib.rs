@@ -95,7 +95,10 @@ pub mod term;
 pub mod terms;
 pub mod util;
 
-pub use cap::{CapBiasCurve, CapInterpolation, ImageCap, ImageCapBuilder, ImageCapDiagnostics};
+pub use cap::{
+    CapBiasCurve, CapInterpolation, ImageCap, ImageCapBuilder, ImageCapDiagnostics,
+    StatisticalCapConfig,
+};
 pub use color::{Oklab, Oklch};
 pub use diagnostics::{PaletteSolution, SlotDiagnostics, SolverDiagnostics, TermBreakdown};
 pub use domain::{CapPolicy, HueDomain, Interval, SlotDomain};
@@ -104,9 +107,9 @@ pub use problem::{GradientMode, PaletteProblem, SlotSpec, SolveConfig};
 pub use solver::{solve, solve_with_rng};
 pub use support::WeightedSample;
 pub use term::{
-    ChromaTargetTerm, ContrastTerm, CoverTerm, DeltaCTarget, DeltaHTarget, DeltaLTarget,
-    GroupAxis, GroupMember, GroupQuantileTerm, GroupTarget, HueTargetTerm, HueUnaryTarget,
+    ChromaTargetTerm, ContrastTerm, CoverTerm, DeltaCTarget, DeltaHTarget, DeltaLTarget, GroupAxis,
+    GroupMember, GroupQuantileTerm, GroupTarget, HueTargetTerm, HueUnaryTarget,
     LightnessTargetTerm, Monotonicity, OrderRelation, PairDeltaCTerm, PairDeltaHTerm,
-    PairDeltaLTerm, PairDistanceTerm, PairOrderTerm, QuantileKnot, SaliencyTarget,
-    SaliencyTerm, ScalarTarget, SupportTerm, Term, WeightedTerm,
+    PairDeltaLTerm, PairDistanceTerm, PairOrderTerm, QuantileKnot, RelativeChromaTargetTerm,
+    SaliencyTarget, SaliencyTerm, ScalarTarget, SupportTerm, Term, WeightedTerm,
 };

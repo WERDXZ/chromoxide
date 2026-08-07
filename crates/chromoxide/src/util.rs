@@ -123,7 +123,81 @@ pub fn softmin(values: &[f64], tau: f64) -> f64 {
     -tau * (sum.ln() + max_scaled)
 }
 
+/// Expected value under a soft-assignment Boltzmann distribution.
+///
+/// This treats `values` as non-negative costs: lower is better, and the result
+/// is a convex combination of the inputs, so it always lies between the min and
+/// max of `values`. Unlike [`softmin`] it returns `0` when every value is `0`
+/// (there is no free-energy offset), which makes it suitable as a non-negative
+/// distance before robust penalties such as pseudo-Huber.
+pub fn soft_assignment_expected_value(values: &[f64], tau: f64) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let v_min = values
+        .iter()
+        .copied()
+        .fold(f64::INFINITY, |acc, v| if v < acc { v } else { acc });
+    if tau <= EPS {
+        return v_min;
+    }
+
+    let inv_tau = 1.0 / tau;
+    let mut weight_sum = 0.0;
+    let mut weighted_sum = 0.0;
+    for &v in values {
+        let weight = (-(v - v_min) * inv_tau).exp();
+        weight_sum += weight;
+        weighted_sum += weight * v;
+    }
+
+    if weight_sum <= EPS {
+        v_min
+    } else {
+        weighted_sum / weight_sum
+    }
+}
+
 /// L2 norm of a dense vector.
 pub fn l2_norm(v: &[f64]) -> f64 {
     v.iter().map(|x| x * x).sum::<f64>().sqrt()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::soft_assignment_expected_value;
+
+    #[test]
+    fn soft_assignment_two_zero_values_is_zero() {
+        let v = soft_assignment_expected_value(&[0.0, 0.0], 0.02);
+        assert!((v - 0.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn soft_assignment_small_tau_approaches_minimum() {
+        let v = soft_assignment_expected_value(&[0.0, 1.0], 1.0e-6);
+        assert!((v - 0.0).abs() < 1.0e-10);
+    }
+
+    #[test]
+    fn soft_assignment_stays_between_min_and_max() {
+        let cases: &[&[f64]] = &[
+            &[0.0, 0.0],
+            &[0.0, 1.0],
+            &[0.25, 0.75],
+            &[-2.0, -1.0, 5.0],
+            &[3.0],
+        ];
+        for values in cases {
+            let v = soft_assignment_expected_value(values, 0.05);
+            let min = values.iter().copied().fold(f64::INFINITY, f64::min);
+            let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            assert!(v >= min - 1.0e-12 && v <= max + 1.0e-12);
+        }
+    }
+
+    #[test]
+    fn soft_assignment_empty_is_zero() {
+        assert_eq!(soft_assignment_expected_value(&[], 0.02), 0.0);
+    }
 }

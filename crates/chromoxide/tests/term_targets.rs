@@ -24,11 +24,15 @@ fn make_ctx(slots_lch: &[Oklch], hue_gates: &[f64]) -> EvalContext<'static> {
     let luminance = Box::leak(luminance.into_boxed_slice());
     let lch = Box::leak(slots_lch.to_vec().into_boxed_slice());
     let gates = Box::leak(hue_gates.to_vec().into_boxed_slice());
+    let lower = Box::leak(vec![0.0; slots_lch.len()].into_boxed_slice());
+    let upper = Box::leak(vec![1.0; slots_lch.len()].into_boxed_slice());
     EvalContext {
         slots_lab: labs,
         slots_lch: lch,
         luminance,
         hue_gates: gates,
+        chroma_lower_bounds: lower,
+        chroma_upper_bounds: upper,
         samples: &[],
     }
 }

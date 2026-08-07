@@ -24,7 +24,7 @@ use std::{
 };
 
 use chromoxide_image::{
-    CapConfig, FarthestPointLabConfig, ImagePipelineConfig, LocalContrastConfig, SaliencyConfig,
+    CapConfig, ImagePipelineConfig, KMeansPlusPlusLabConfig, LocalContrastConfig, SaliencyConfig,
     SaliencyMethod, SamplingConfig, SamplingMethod,
 };
 use serde::{Deserialize, Serialize};
@@ -173,10 +173,12 @@ pub fn default_image_config() -> ImagePipelineConfig {
             method: SaliencyMethod::LocalContrast(LocalContrastConfig::default()),
         },
         sampling: SamplingConfig {
-            method: SamplingMethod::FarthestPointLab(FarthestPointLabConfig {
+            method: SamplingMethod::KMeansPlusPlusLab(KMeansPlusPlusLabConfig {
                 count: NonZeroUsize::new(24).expect("24 is non-zero"),
                 candidate_stride: NonZeroU32::new(2).expect("2 is non-zero"),
                 saliency_bias: 0.35,
+                max_iters: NonZeroUsize::new(20).expect("20 is non-zero"),
+                convergence_tol: 1.0e-5,
             }),
         },
         cap: Some(CapConfig::default()),
@@ -200,6 +202,14 @@ where
 fn merge_toml_value(dst: &mut toml::Value, src: toml::Value) {
     match (dst, src) {
         (toml::Value::Table(dst), toml::Value::Table(src)) => {
+            // Externally tagged enums are single-key tables (for example
+            // `method = { FarthestPointLab = { ... } }`). Replacing one enum
+            // variant with a different variant must replace the whole value
+            // instead of merging the two variant keys.
+            if dst.len() == 1 && src.len() == 1 && dst.keys().next() != src.keys().next() {
+                *dst = src;
+                return;
+            }
             for (key, value) in src {
                 match dst.get_mut(&key) {
                     Some(existing) => merge_toml_value(existing, value),
@@ -274,7 +284,7 @@ seed_count = 20
 method = { LocalContrast = { blur_radius = 5, color_weight = 1.0, luminance_weight = 0.5, global_mix = 0.1, robust_normalize = true } }
 
 [image.sampling]
-method = { FarthestPointLab = { count = 16, candidate_stride = 4, saliency_bias = 0.5 } }
+method = { KMeansPlusPlusLab = { count = 16, candidate_stride = 4, saliency_bias = 0.5, max_iters = 25, convergence_tol = 1.0e-5 } }
 "#,
         )
         .expect("config should parse");
@@ -290,6 +300,16 @@ method = { FarthestPointLab = { count = 16, candidate_stride = 4, saliency_bias 
         }
 
         assert_eq!(config.templates.len(), 2);
+        match &config.image.sampling.method {
+            chromoxide_image::SamplingMethod::KMeansPlusPlusLab(cfg) => {
+                assert_eq!(cfg.count.get(), 16);
+                assert_eq!(cfg.candidate_stride.get(), 4);
+                assert_eq!(cfg.saliency_bias, 0.5);
+                assert_eq!(cfg.max_iters.get(), 25);
+                assert_eq!(cfg.convergence_tol, 1.0e-5);
+            }
+            _ => panic!("expected k-means++ sampling"),
+        }
         assert_eq!(
             config.templates[0].resolve_input(Path::new("/tmp/chrox")),
             Path::new("/tmp/chrox/templates/alacritty.toml")
@@ -369,13 +389,34 @@ keep_top_k = 3
             _ => panic!("expected local contrast saliency"),
         }
         match &config.image.sampling.method {
-            chromoxide_image::SamplingMethod::FarthestPointLab(cfg) => {
+            chromoxide_image::SamplingMethod::KMeansPlusPlusLab(cfg) => {
                 assert_eq!(cfg.count.get(), 24);
                 assert_eq!(cfg.candidate_stride.get(), 2);
+                assert_eq!(cfg.saliency_bias, 0.35);
+                assert_eq!(cfg.max_iters.get(), 20);
+                assert_eq!(cfg.convergence_tol, 1.0e-5);
+            }
+            _ => panic!("expected k-means++ sampling"),
+        }
+        assert!(config.image.cap.is_some());
+    }
+
+    #[test]
+    fn farthest_point_sampling_config_still_parses() {
+        let config = Config::from_str(
+            r#"
+[image.sampling]
+method = { FarthestPointLab = { count = 8, candidate_stride = 3, saliency_bias = 0.2 } }
+"#,
+        )
+        .expect("config should parse");
+        match &config.image.sampling.method {
+            chromoxide_image::SamplingMethod::FarthestPointLab(cfg) => {
+                assert_eq!(cfg.count.get(), 8);
+                assert_eq!(cfg.candidate_stride.get(), 3);
             }
             _ => panic!("expected farthest point sampling"),
         }
-        assert!(config.image.cap.is_some());
     }
 
     #[test]

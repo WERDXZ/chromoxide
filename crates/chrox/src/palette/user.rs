@@ -26,7 +26,7 @@ use chromoxide::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{solve_problem, Palette, SolveError};
+use super::{Palette, SolveError, solve_problem};
 use crate::solve_config::{Error as SolveConfigError, PartialSolveConfig};
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -368,6 +368,33 @@ term = { Cover = { slots = [0], tau = 0.02, delta = 0.03 } }
         assert_eq!(problem.slots.len(), 1);
         assert_eq!(problem.terms.len(), 1);
         assert_eq!(problem.samples.len(), 1);
+    }
+
+    #[test]
+    fn saliency_term_without_support_scale_defaults_to_point_zero_five() {
+        let palette = PaletteFile::from_str(
+            r#"
+name = "saliency-default"
+
+[[slots]]
+name = "bg"
+domain = { lightness = { min = 0.10, max = 0.90 }, chroma = { min = 0.00, max = 0.20 }, hue = "Any", cap_policy = "Ignore", chroma_epsilon = 0.02 }
+
+[[terms]]
+weight = 1.0
+name = "sal"
+term = { Saliency = { slot = 0, sigma = 0.08, target = { Target = { value = 1.0, delta = 0.05 } } } }
+"#,
+        )
+        .expect("palette should parse");
+
+        let wt = &palette.terms[0];
+        match &wt.term {
+            chromoxide::Term::Saliency(t) => {
+                assert_eq!(t.support_scale, 0.05);
+            }
+            _ => panic!("expected saliency term"),
+        }
     }
 
     #[test]

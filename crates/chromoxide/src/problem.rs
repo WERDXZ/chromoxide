@@ -132,22 +132,17 @@ impl PaletteProblem {
             }
         }
 
-        let any_hard_or_soft = self.slots.iter().any(|s| {
-            matches!(
-                s.domain.cap_policy,
-                CapPolicy::HardIntersect | CapPolicy::SoftPenalty { .. }
-            )
-        });
-        if any_hard_or_soft && self.image_cap.is_none() {
-            return Err(PaletteError::InvalidProblem(
-                "at least one slot requires image_cap but problem.image_cap is None".to_string(),
-            ));
-        }
-        if self
+        let any_hard = self
             .slots
             .iter()
-            .any(|s| matches!(s.domain.cap_policy, CapPolicy::HardIntersect))
-        {
+            .any(|s| matches!(s.domain.cap_policy, CapPolicy::HardIntersect));
+        if any_hard && self.image_cap.is_none() {
+            return Err(PaletteError::InvalidProblem(
+                "at least one hard-intersect slot requires image_cap but problem.image_cap is None"
+                    .to_string(),
+            ));
+        }
+        if any_hard {
             let cap = self.image_cap.as_ref().ok_or_else(|| {
                 PaletteError::InvalidProblem(
                     "HardIntersect requires image_cap to be present".to_string(),
@@ -256,6 +251,11 @@ fn validate_term(term: &Term, n_slots: usize) -> Result<(), PaletteError> {
         Term::Saliency(t) => {
             validate_slot_index(t.slot, n_slots, "SaliencyTerm.slot")?;
             validate_positive_finite(t.sigma, "SaliencyTerm.sigma")?;
+            if !t.support_scale.is_finite() || t.support_scale <= 0.0 {
+                return Err(PaletteError::InvalidProblem(
+                    "SaliencyTerm.support_scale must be finite and > 0".to_string(),
+                ));
+            }
             validate_hinge_delta(t.hinge_delta, "SaliencyTerm.hinge_delta")?;
         }
         Term::LightnessTarget(t) => {
@@ -267,6 +267,11 @@ fn validate_term(term: &Term, n_slots: usize) -> Result<(), PaletteError> {
             validate_slot_index(t.slot, n_slots, "ChromaTargetTerm.slot")?;
             validate_scalar_target(&t.target, "ChromaTargetTerm.target")?;
             validate_hinge_delta(t.hinge_delta, "ChromaTargetTerm.hinge_delta")?;
+        }
+        Term::RelativeChromaTarget(t) => {
+            validate_slot_index(t.slot, n_slots, "RelativeChromaTargetTerm.slot")?;
+            validate_relative_chroma_target(&t.target)?;
+            validate_hinge_delta(t.hinge_delta, "RelativeChromaTargetTerm.hinge_delta")?;
         }
         Term::HueTarget(t) => {
             validate_slot_index(t.slot, n_slots, "HueTargetTerm.slot")?;
@@ -358,6 +363,37 @@ fn validate_term(term: &Term, n_slots: usize) -> Result<(), PaletteError> {
                     ));
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// Validates a scalar target that is applied to a `[0, 1]` relative chroma ratio.
+fn validate_relative_chroma_target(target: &crate::term::ScalarTarget) -> Result<(), PaletteError> {
+    let in_unit = |v: f64| v.is_finite() && (0.0..=1.0).contains(&v);
+    match *target {
+        crate::term::ScalarTarget::Min(v) | crate::term::ScalarTarget::Max(v) => {
+            if !in_unit(v) {
+                return Err(PaletteError::InvalidProblem(
+                    "RelativeChromaTargetTerm.target bound must be in [0, 1]".to_string(),
+                ));
+            }
+        }
+        crate::term::ScalarTarget::Range { min, max } => {
+            if !in_unit(min) || !in_unit(max) || min > max {
+                return Err(PaletteError::InvalidProblem(
+                    "RelativeChromaTargetTerm.target range must be in [0, 1] and satisfy min <= max"
+                        .to_string(),
+                ));
+            }
+        }
+        crate::term::ScalarTarget::Target { value, delta } => {
+            if !in_unit(value) {
+                return Err(PaletteError::InvalidProblem(
+                    "RelativeChromaTargetTerm.target value must be in [0, 1]".to_string(),
+                ));
+            }
+            validate_positive_finite(delta, "RelativeChromaTargetTerm.target.delta")?;
         }
     }
     Ok(())

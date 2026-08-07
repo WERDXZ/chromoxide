@@ -73,7 +73,7 @@ pub fn solve_with_rng(
 ) -> Result<PaletteSolution, PaletteError> {
     problem.validate()?;
 
-    let evaluator = ObjectiveEvaluator::new(problem);
+    let evaluator = ObjectiveEvaluator::new(problem)?;
     let seeds = generate_seeds(problem, rng)?;
 
     let mut runs = Vec::with_capacity(seeds.len());

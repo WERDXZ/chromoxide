@@ -2,7 +2,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use chromoxide::ImageCapBuilder;
 use chromoxide_image::{
-    CapConfig, CapSource, FarthestPointLabConfig, ImagePipelineConfig, LocalContrastConfig,
+    CapConfig, CapSource, ImagePipelineConfig, KMeansPlusPlusLabConfig, LocalContrastConfig,
     PreprocessConfig, ResizeFilter, SaliencyConfig, SaliencyMethod, SamplingConfig, SamplingMethod,
     prepare_support_from_image_with_rng,
 };
@@ -47,10 +47,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }),
         },
         sampling: SamplingConfig {
-            method: SamplingMethod::FarthestPointLab(FarthestPointLabConfig {
+            method: SamplingMethod::KMeansPlusPlusLab(KMeansPlusPlusLabConfig {
                 count: NonZeroUsize::new(12).expect("non-zero"),
                 candidate_stride: NonZeroU32::new(2).expect("non-zero"),
                 saliency_bias: 0.4,
+                max_iters: NonZeroUsize::new(20).expect("non-zero"),
+                convergence_tol: 1.0e-5,
             }),
         },
         export: chromoxide_image::ExportConfig::default(),
@@ -71,6 +73,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("diagnostics: {:?}", support.diagnostics);
     println!("has image_cap: {}", support.image_cap.is_some());
+    println!(
+        "statistical solve hint: chromoxide::CapPolicy::statistical_default() can reuse these samples"
+    );
 
     Ok(())
 }

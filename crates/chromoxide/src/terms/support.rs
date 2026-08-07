@@ -31,3 +31,16 @@ pub fn evaluate(term: &SupportTerm, ctx: &EvalContext<'_>) -> TermEvaluation {
         components: vec![if count > 0.0 { mean_score / count } else { 0.0 }],
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::util::softmin;
+
+    #[test]
+    fn support_still_uses_free_energy_softmin() {
+        // softmin of two zero costs is the free-energy offset, not 0; SupportTerm
+        // intentionally keeps this behavior for prior-adjusted scores.
+        let v = softmin(&[0.0, 0.0], 0.02);
+        assert!((v - (-0.02 * 2.0_f64.ln())).abs() < 1.0e-12);
+    }
+}

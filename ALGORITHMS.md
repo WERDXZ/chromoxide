@@ -101,6 +101,71 @@ Common term parameters:
 - `mass`
   - relative importance of members in `GroupQuantile`
 
+### 4.1 Cover uses soft-assignment expected distance
+
+`Cover` first converts each sample's squared Oklab distance to the participating
+slots into a soft-assignment expected value:
+
+```text
+v_min = min(d0², d1², ...)
+weight_i = exp(-(d_i² - v_min) / tau)
+d_soft = sum(weight_i * d_i²) / sum(weight_i)
+```
+
+The `v_min` subtraction keeps the exponentials stable. The result is a convex
+combination of the squared distances, so it is `0` when every participating slot
+coincides with the sample and always lies between the minimum and maximum
+squared distance. That non-negative value is then fed through pseudo-Huber with
+`delta`.
+
+This is deliberately different from a free-energy softmin: `softmin([0, 0])`
+returns `-tau * ln(2)`, which would not be usable as a non-negative distance.
+
+### 4.2 Support keeps free-energy softmin
+
+`Support` scores each slot against all samples using prior-adjusted values
+`d² - beta * ln(weight + epsilon)` and still uses the ordinary softmin
+
+```text
+-tau * ln(sum(exp(-score_i / tau)))
+```
+
+because those scores may legitimately be negative after the weight prior is
+subtracted. `Cover` and `Support` therefore use different aggregation formulas.
+
+### 4.3 Saliency: conditional, support density, gate, effective
+
+At a query color, saliency is estimated with mass-weighted RBF regression:
+
+```text
+kernel_i = exp(-d_i² / (2 * sigma²))
+weighted_kernel_i = max(weight_i, 0) * kernel_i
+conditional = clamp(sum(weighted_kernel_i * clamp(saliency_i, 0, 1))
+                    / sum(weighted_kernel_i), 0, 1)
+normalized_density = clamp(sum(weighted_kernel_i) / total_mass, 0, 1)
+gate = clamp(1 - exp(-normalized_density / support_scale), 0, 1)
+effective = clamp(conditional * gate, 0, 1)
+```
+
+`total_mass` is `sum(max(weight_i, 0))`. `SaliencyTarget` values are evaluated
+against `effective`; the diagnostics components are emitted in the fixed order
+`[effective, conditional, normalized_density, gate]`.
+
+### 4.4 Relative chroma target
+
+`RelativeChromaTarget` normalizes a slot's chroma against its effective decode
+interval:
+
+```text
+span = hi - lo
+ratio = 1                          if span <= EPS
+      = clamp((C - lo) / span, 0, 1) otherwise
+```
+
+The scalar target is applied to `ratio` (not to absolute chroma), so
+`Target { value: 0.9, ... }` means "90% of the slot's feasible chroma interval"
+instead of an impossible absolute target like `C = 1.0`.
+
 References:
 
 - Huber loss: <https://en.wikipedia.org/wiki/Huber_loss>
@@ -122,9 +187,13 @@ Important parameters:
 - `chroma_epsilon`
   - below this, hue-sensitive behavior is softened
 - `cap_policy`
-  - `Ignore`, `HardIntersect`, or `SoftPenalty`
-- `relax`
-  - soft-cap multiplier when `SoftPenalty` is used
+  - `Ignore`, `HardIntersect`, or `Statistical`
+- `percentile`
+  - weighted per-cell chroma cutoff used by `Statistical`
+- `tolerance_factor`
+  - headroom applied after percentile estimation so bright outliers do not fully determine the cap
+- `use_conditional_hue`
+  - restricts the cap to hue bins that carry meaningful mass at a given lightness
 - `cap_interpolation`
   - how cap values are queried from the cap surface
 
@@ -180,19 +249,65 @@ Reference:
 
 Sampling chooses representative candidates from the image.
 
+Available methods:
+
+- `UniformGrid` - grid-aligned selection in image space
+- `Stratified` - random per-tile selection
+- `RandomUniform` - uniform random selection from valid pixels
+- `FarthestPointLab` - greedy farthest-point selection in Oklab
+- `KMeansPlusPlusLab` - weighted k-means++ seeding plus Lloyd refinement in Oklab
+
 Important parameters:
 
 - `count`
   - desired number of representatives
 - `candidate_stride`
-  - candidate downsampling stride for farthest-point methods
+  - candidate downsampling stride for farthest-point / k-means++ seeding pools
 - `saliency_bias`
   - how much salient regions are preferred during selection
+- `max_iters`
+  - Lloyd iteration cap
+- `convergence_tol`
+  - stop when the maximum Oklab center movement is below this value
 
 References:
 
 - Farthest-first traversal: <https://en.wikipedia.org/wiki/Farthest-first_traversal>
+- k-means++: <https://en.wikipedia.org/wiki/K-means%2B%2B>
+- Lloyd's algorithm: <https://en.wikipedia.org/wiki/Lloyd%27s_algorithm>
 - Stratified sampling: <https://en.wikipedia.org/wiki/Stratified_sampling>
+
+### 6.3.1 KMeansPlusPlusLab
+
+The k-means++ method seeds clusters from a candidate pool:
+
+1. Start with `valid_indices` stepped by `candidate_stride`; if the pool is
+   smaller than the target cluster count, pad it with remaining valid pixels in
+   index order until it has at least `min(count, valid_pixel_count)` entries.
+2. Assign each candidate a base mass
+   `alpha * (1 + saliency_bias * clamp(saliency, 0, 1))`.
+3. Draw the first center proportional to base mass.
+4. For each subsequent center, draw proportional to
+   `base_mass * min_distance2_to_existing_centers`, without replacement, using a
+   stable cumulative weighted selection; deterministic fallback chooses the
+   smallest unselected pixel index when the weight sum is non-positive.
+
+After seeding, Lloyd refinement runs over **all** valid pixels (not just the
+candidate pool):
+
+- assign each pixel to the nearest Oklab center (ties go to the lower cluster
+  index);
+- update each center with the alpha-weighted centroid
+  `sum(max(alpha, 0) * lab) / sum(max(alpha, 0))`;
+- empty clusters are repaired by choosing the valid pixel maximizing
+  `alpha * min_distance2` to non-empty centers (ties and all-zero scores pick
+  the smallest unused valid pixel index);
+- stop when `max_center_movement² <= convergence_tol²` or `max_iters` is
+  reached.
+
+Saliency affects only the seeding probabilities, never the Lloyd centroids.
+After refinement, each center gets a unique nearest-pixel anchor and is exported
+as `Representative { pixel_index, lab }`; `lab` is the Lloyd center.
 
 ### 6.4 Export to weighted samples
 
@@ -219,7 +334,18 @@ References:
 
 ### 6.5 Image cap
 
-The cap builder estimates the maximum plausible chroma as a function of lightness and hue.
+The cap builder estimates plausible chroma as a function of lightness and hue.
+
+The baseline builder records the maximum observed chroma in each `(L, h)` bin. The
+statistical builder instead records a weighted percentile per bin, then fills holes and
+smooths the grid exactly like the max-based builder. This keeps the cap faithful to the
+observed image volume without letting one extreme pixel dominate an entire band.
+
+When `use_conditional_hue` is enabled, low-mass hue bins are suppressed separately within
+each lightness row before hole filling. This matters for images whose vivid accents only
+appear in specific lightness ranges: a bright pink hair highlight should not automatically
+raise the allowed chroma for mid-lightness skin hues just because both colors exist
+somewhere in the image.
 
 Important parameters:
 
@@ -250,7 +376,14 @@ Examples:
   - solve 8 base colors
   - derive `bright_*` exports afterward
 
-## 8. Contrast and formatting
+## 8. Default image sampling
+
+`chrox`'s default image config now uses
+`KMeansPlusPlusLab { count = 24, candidate_stride = 2, saliency_bias = 0.35,
+max_iters = 20, convergence_tol = 1e-5 }`. `FarthestPointLab` remains available
+and existing configs that select it still parse.
+
+## 9. Contrast and formatting
 
 Template filters are formatting functions, not solve terms.
 

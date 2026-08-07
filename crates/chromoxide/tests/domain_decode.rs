@@ -81,6 +81,70 @@ fn hard_cap_decode_never_exceeds_cap() {
 }
 
 #[test]
+fn decode_exposes_effective_chroma_bounds() {
+    let samples = vec![
+        WeightedSample::new(
+            Oklch {
+                l: 0.5,
+                c: 0.04,
+                h: 1.0,
+            }
+            .to_oklab(),
+            10.0,
+            1.0,
+        ),
+        WeightedSample::new(
+            Oklch {
+                l: 0.52,
+                c: 0.045,
+                h: 1.1,
+            }
+            .to_oklab(),
+            8.0,
+            0.8,
+        ),
+    ];
+    let cap = ImageCapBuilder {
+        n_l: 8,
+        n_h: 24,
+        smooth_l_radius: 0,
+        smooth_h_radius: 0,
+        relax: 1.0,
+    }
+    .build(&samples)
+    .unwrap();
+
+    let ignore = SlotDomain {
+        lightness: Interval { min: 0.3, max: 0.8 },
+        chroma: Interval {
+            min: 0.01,
+            max: 0.18,
+        },
+        hue: HueDomain::Any,
+        cap_policy: CapPolicy::Ignore,
+        chroma_epsilon: 0.02,
+    };
+    let decoded = decode_slot(&ignore, 0.0, 0.0, 0.0, Some(&cap)).unwrap();
+    assert!((decoded.effective_chroma_min - 0.01).abs() < 1.0e-12);
+    assert!((decoded.effective_chroma_max - 0.18).abs() < 1.0e-12);
+
+    let hard = SlotDomain {
+        lightness: Interval { min: 0.3, max: 0.8 },
+        chroma: Interval {
+            min: 0.01,
+            max: 0.2,
+        },
+        hue: HueDomain::Any,
+        cap_policy: CapPolicy::HardIntersect,
+        chroma_epsilon: 0.02,
+    };
+    let decoded = decode_slot(&hard, 0.0, 8.0, 0.0, Some(&cap)).unwrap();
+    let queried_cap = cap.query(decoded.lch.l, decoded.lch.h);
+    assert!((decoded.effective_chroma_max - queried_cap).abs() < 1.0e-10);
+    assert!((decoded.effective_chroma_min - 0.01).abs() < 1.0e-10);
+}
+
+#[test]
 fn hue_arc_cross_zero_uses_explicit_len_without_ambiguity() {
     let domain = SlotDomain {
         lightness: Interval { min: 0.4, max: 0.6 },

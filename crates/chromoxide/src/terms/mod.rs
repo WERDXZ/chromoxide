@@ -9,5 +9,6 @@ pub mod lightness_target;
 pub mod pair_delta;
 pub mod pair_distance;
 pub mod pair_order;
+pub mod relative_chroma_target;
 pub mod saliency;
 pub mod support;

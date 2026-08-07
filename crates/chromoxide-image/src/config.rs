@@ -171,6 +171,8 @@ pub enum SamplingMethod {
     RandomUniform(RandomUniformConfig),
     /// Greedy farthest-point sampling in Oklab space.
     FarthestPointLab(FarthestPointLabConfig),
+    /// Weighted k-means++ seeding followed by Lloyd refinement in Oklab space.
+    KMeansPlusPlusLab(KMeansPlusPlusLabConfig),
 }
 
 /// Config for uniform-grid sampling.
@@ -213,6 +215,26 @@ pub struct FarthestPointLabConfig {
     ///
     /// Higher values pull selected representatives toward salient regions.
     pub saliency_bias: f64,
+}
+
+/// Config for saliency-weighted k-means++ seeding plus Lloyd refinement.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KMeansPlusPlusLabConfig {
+    /// Target cluster count.
+    pub count: NonZeroUsize,
+    /// Candidate stride used only for building the k-means++ seeding pool.
+    pub candidate_stride: NonZeroU32,
+    /// Saliency bias used only for k-means++ seeding probabilities.
+    ///
+    /// Must be finite and `>= 0`. Lloyd centroid updates ignore saliency.
+    pub saliency_bias: f64,
+    /// Maximum number of Lloyd iterations.
+    pub max_iters: NonZeroUsize,
+    /// Oklab center-movement stopping threshold.
+    ///
+    /// Must be finite and `> 0`.
+    pub convergence_tol: f64,
 }
 
 /// Configuration for converting clusters into weighted samples.

@@ -3,19 +3,21 @@ use crate::palette::Palette;
 use super::ansi8_derived::DeriveAnsiBrightExport;
 use super::common::{accent_slot, low_chroma_term, neutral_slot, weighted};
 use super::export::BuiltinExport;
+use super::priors;
 use super::recipe::BuiltinPalette;
 use crate::solve_config::PartialSolveConfig;
 use chromoxide::{
-    ChromaTargetTerm, ContrastTerm, CoverTerm, Interval, ScalarTarget, SupportTerm, Term,
+    ContrastTerm, CoverTerm, Interval, LightnessTargetTerm, ScalarTarget, SupportTerm, Term,
     WeightedTerm,
 };
 
 pub fn ansi_8_derived_light() -> Box<dyn Palette> {
-    Box::new(BuiltinPalette::new(
+    Box::new(BuiltinPalette::new_with_dynamic_terms(
         "ansi-8-derived-light",
         "ANSI 8 Derived Light",
         slots(),
         terms(),
+        Some(priors::ansi8_terms),
         PartialSolveConfig {
             seed_count: Some(24),
             keep_top_k: Some(8),
@@ -40,8 +42,8 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             340.0,
             45.0,
             Interval {
-                min: 0.25,
-                max: 0.58,
+                min: 0.48,
+                max: 0.64,
             },
             Interval {
                 min: 0.08,
@@ -53,8 +55,8 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             110.0,
             55.0,
             Interval {
-                min: 0.26,
-                max: 0.58,
+                min: 0.54,
+                max: 0.70,
             },
             Interval {
                 min: 0.08,
@@ -66,8 +68,8 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             70.0,
             40.0,
             Interval {
-                min: 0.40,
-                max: 0.68,
+                min: 0.62,
+                max: 0.80,
             },
             Interval {
                 min: 0.07,
@@ -79,8 +81,8 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             225.0,
             60.0,
             Interval {
-                min: 0.28,
-                max: 0.60,
+                min: 0.50,
+                max: 0.66,
             },
             Interval {
                 min: 0.08,
@@ -92,8 +94,8 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             285.0,
             55.0,
             Interval {
-                min: 0.28,
-                max: 0.60,
+                min: 0.50,
+                max: 0.66,
             },
             Interval {
                 min: 0.08,
@@ -105,8 +107,8 @@ fn slots() -> Vec<chromoxide::SlotSpec> {
             165.0,
             60.0,
             Interval {
-                min: 0.30,
-                max: 0.62,
+                min: 0.54,
+                max: 0.72,
             },
             Interval {
                 min: 0.07,
@@ -157,6 +159,18 @@ fn terms() -> Vec<WeightedTerm> {
         (6, "cyan"),
     ] {
         out.push(weighted(
+            &format!("{name}-lightness"),
+            3.0,
+            Term::LightnessTarget(LightnessTargetTerm {
+                slot,
+                target: ScalarTarget::Target {
+                    value: super::ansi8_derived::accent_lightness_target(name, true),
+                    delta: 0.035,
+                },
+                hinge_delta: None,
+            }),
+        ));
+        out.push(weighted(
             &format!("{name}-support"),
             2.0,
             Term::Support(SupportTerm {
@@ -164,18 +178,6 @@ fn terms() -> Vec<WeightedTerm> {
                 tau: 0.03,
                 beta: 0.10,
                 epsilon: 1.0e-4,
-            }),
-        ));
-        out.push(weighted(
-            &format!("{name}-chroma"),
-            3.0,
-            Term::ChromaTarget(ChromaTargetTerm {
-                slot,
-                target: ScalarTarget::Target {
-                    value: 1.0,
-                    delta: 0.20,
-                },
-                hinge_delta: Some(0.03),
             }),
         ));
     }

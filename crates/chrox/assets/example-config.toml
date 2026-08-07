@@ -33,7 +33,7 @@ alpha_into_weight = false
 method = { LocalContrast = { blur_radius = 3, color_weight = 1.0, luminance_weight = 1.0, global_mix = 0.2, robust_normalize = true } }
 
 [image.sampling]
-method = { FarthestPointLab = { count = 24, candidate_stride = 2, saliency_bias = 0.35 } }
+method = { KMeansPlusPlusLab = { count = 24, candidate_stride = 2, saliency_bias = 0.35, max_iters = 20, convergence_tol = 0.00001 } }
 
 [image.export]
 center_mode = "Centroid"

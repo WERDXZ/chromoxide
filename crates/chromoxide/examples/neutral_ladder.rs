@@ -31,7 +31,19 @@ fn main() {
                     max: 0.03,
                 },
                 hue: HueDomain::Any,
-                cap_policy: CapPolicy::Ignore,
+                // Keep one rung on the statistical cap path to show that image-faithful
+                // cap handling still behaves well for a near-neutral ladder.
+                cap_policy: if i == 0 {
+                    CapPolicy::Statistical {
+                        percentile: 0.95,
+                        tolerance_factor: 0.12,
+                        smoothing: 1.0,
+                        use_conditional_hue: true,
+                        penalty_weight: 1.0,
+                    }
+                } else {
+                    CapPolicy::Ignore
+                },
                 chroma_epsilon: 0.01,
             },
         })
@@ -68,6 +80,7 @@ fn main() {
     };
 
     let solution = solve(&problem).expect("solve failed");
+    println!("note: n0 uses a statistical cap with 12% tolerance headroom");
     println!("objective: {:.6}", solution.objective);
     for (i, c) in solution.colors_lch.iter().enumerate() {
         println!("n{i}: L={:.4} C={:.4}", c.l, c.c);

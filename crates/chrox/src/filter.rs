@@ -1,5 +1,5 @@
-use chromoxide::convert::oklab_to_linear_srgb;
 use chromoxide::Oklch;
+use chromoxide::convert::oklab_to_linear_srgb;
 use phf::phf_map;
 
 pub type FilterFn = fn(Oklch) -> String;
