@@ -715,29 +715,76 @@ mod tests {
 
     #[test]
     fn lloyd_refine_never_increases_cluster_sse() {
-        let red = chromoxide::Oklab {
-            l: 0.55,
-            a: 0.18,
-            b: 0.05,
-        };
-        let blue = chromoxide::Oklab {
-            l: 0.45,
-            a: -0.12,
-            b: -0.20,
-        };
+        let cluster_a = [
+            chromoxide::Oklab {
+                l: 0.52,
+                a: 0.16,
+                b: 0.04,
+            },
+            chromoxide::Oklab {
+                l: 0.55,
+                a: 0.18,
+                b: 0.05,
+            },
+            chromoxide::Oklab {
+                l: 0.58,
+                a: 0.20,
+                b: 0.06,
+            },
+        ];
+        let cluster_b = [
+            chromoxide::Oklab {
+                l: 0.42,
+                a: -0.10,
+                b: -0.18,
+            },
+            chromoxide::Oklab {
+                l: 0.45,
+                a: -0.12,
+                b: -0.20,
+            },
+            chromoxide::Oklab {
+                l: 0.48,
+                a: -0.14,
+                b: -0.22,
+            },
+        ];
         let prepared = PreparedImage {
             width: 2,
-            height: 2,
-            pixels: vec![pixel(red), pixel(red), pixel(blue), pixel(blue)],
-            valid_indices: vec![0, 1, 2, 3],
+            height: 3,
+            pixels: cluster_a
+                .iter()
+                .chain(cluster_b.iter())
+                .map(|&lab| pixel(lab))
+                .collect(),
+            valid_indices: (0..6).collect(),
         };
-        let centers = vec![red, blue];
-        let initial_sse = cluster_sse(&prepared, &centers);
-        let refined = lloyd_refine(&prepared, centers, 20, 1.0e-9).unwrap();
+        let initial_centers = vec![
+            chromoxide::Oklab {
+                l: 0.48,
+                a: 0.12,
+                b: 0.01,
+            },
+            chromoxide::Oklab {
+                l: 0.52,
+                a: -0.06,
+                b: -0.12,
+            },
+        ];
+        let initial_sse = cluster_sse(&prepared, &initial_centers);
+        assert!(
+            initial_sse > 1.0e-8,
+            "initial centers must be non-optimal, SSE was {initial_sse}"
+        );
+        let refined = lloyd_refine(&prepared, initial_centers, 20, 1.0e-9).unwrap();
         let final_sse = cluster_sse(&prepared, &refined);
         assert!(
             final_sse <= initial_sse + 1.0e-12,
             "Lloyd increased SSE: {initial_sse} -> {final_sse}"
+        );
+        assert!(
+            final_sse < initial_sse - 1.0e-8,
+            "Lloyd did not strictly improve non-optimal centers: {initial_sse} -> {final_sse}"
         );
     }
 }

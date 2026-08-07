@@ -641,27 +641,37 @@ impl ImageCapBuilder {
         // The support gate must use each cell's own pre-smoothing confidence;
         // otherwise a low-support hue could borrow full chroma from neighbors
         // through confidence-weighted smoothing.
-        let gate_confidence = confidence.clone();
+        let base_grid = grid.clone();
+        let base_confidence = confidence.clone();
+        let gate_confidence = base_confidence.clone();
 
-        let (mean_before_smooth, max_before_smooth) = stats(&grid);
+        let (mean_before_smooth, max_before_smooth) = stats(&base_grid);
 
+        let mut smoothed_grid = base_grid.clone();
+        let mut smoothed_confidence = base_confidence.clone();
         if self.smooth_h_radius > 0 {
-            (grid, confidence) = smooth_h_conf_weighted(
-                &grid,
-                &confidence,
+            (smoothed_grid, smoothed_confidence) = smooth_h_conf_weighted(
+                &smoothed_grid,
+                &smoothed_confidence,
                 self.n_l,
                 self.n_h,
                 self.smooth_h_radius,
             );
         }
         if self.smooth_l_radius > 0 {
-            (grid, confidence) = smooth_l_conf_weighted(
-                &grid,
-                &confidence,
+            (smoothed_grid, smoothed_confidence) = smooth_l_conf_weighted(
+                &smoothed_grid,
+                &smoothed_confidence,
                 self.n_l,
                 self.n_h,
                 self.smooth_l_radius,
             );
+        }
+
+        let blend = config.smoothing.clamp(0.0, 1.0);
+        for i in 0..grid.len() {
+            grid[i] = base_grid[i] * (1.0 - blend) + smoothed_grid[i] * blend;
+            confidence[i] = base_confidence[i] * (1.0 - blend) + smoothed_confidence[i] * blend;
         }
 
         for (cap, conf) in grid.iter_mut().zip(gate_confidence.iter()) {
@@ -970,4 +980,76 @@ fn smooth_l_conf_weighted(
         }
     }
     (out_cap, out_conf)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::f64::consts::TAU;
+
+    use crate::cap::{CapInterpolation, ImageCapBuilder, StatisticalCapConfig};
+    use crate::color::Oklch;
+
+    fn supported_two_hue_cap(smoothing: f64) -> crate::cap::ImageCap {
+        let mut pixels = Vec::new();
+        for _ in 0..50 {
+            pixels.push((
+                Oklch {
+                    l: 0.5,
+                    c: 0.05,
+                    h: 0.0,
+                }
+                .to_oklab(),
+                1.0,
+            ));
+            pixels.push((
+                Oklch {
+                    l: 0.5,
+                    c: 0.20,
+                    h: TAU / 16.0,
+                }
+                .to_oklab(),
+                1.0,
+            ));
+        }
+        ImageCapBuilder {
+            n_l: 2,
+            n_h: 16,
+            smooth_l_radius: 0,
+            smooth_h_radius: 2,
+            relax: 1.0,
+        }
+        .build_statistical_from_weighted_oklab(
+            || pixels.iter().copied(),
+            StatisticalCapConfig {
+                percentile: 1.0,
+                tolerance_factor: 0.0,
+                smoothing,
+                use_conditional_hue: true,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn conditional_smoothing_zero_preserves_supported_cell_caps() {
+        let cap = supported_two_hue_cap(0.0);
+        let cap_a = cap.query_with(cap.l_min, 0.0, CapInterpolation::Nearest);
+        let cap_b = cap.query_with(cap.l_min, TAU / 16.0, CapInterpolation::Nearest);
+        assert!((cap_a - 0.05).abs() < 1.0e-6);
+        assert!((cap_b - 0.20).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn conditional_smoothing_one_blends_supported_cell_caps() {
+        let base = supported_two_hue_cap(0.0);
+        let smoothed = supported_two_hue_cap(1.0);
+        let base_a = base.query_with(base.l_min, 0.0, CapInterpolation::Nearest);
+        let base_b = base.query_with(base.l_min, TAU / 16.0, CapInterpolation::Nearest);
+        let smooth_a = smoothed.query_with(smoothed.l_min, 0.0, CapInterpolation::Nearest);
+        let smooth_b = smoothed.query_with(smoothed.l_min, TAU / 16.0, CapInterpolation::Nearest);
+
+        assert!(smooth_a > base_a);
+        assert!(smooth_b < base_b);
+        assert!((smooth_b - smooth_a).abs() < (base_b - base_a).abs());
+    }
 }

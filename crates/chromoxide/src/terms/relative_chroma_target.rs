@@ -24,9 +24,18 @@ pub fn evaluate(term: &RelativeChromaTargetTerm, ctx: &EvalContext<'_>) -> TermE
         RelativeChromaReference::ImageCap => {
             let user_lo = ctx.user_chroma_lower_bounds[slot];
             let user_hi = ctx.user_chroma_upper_bounds[slot];
-            let cap = ctx.image_cap_chroma_upper_bounds[slot]
-                .unwrap_or(user_lo)
-                .max(0.0);
+            let Some(cap) = ctx
+                .image_cap_chroma_upper_bounds
+                .get(slot)
+                .copied()
+                .flatten()
+            else {
+                return TermEvaluation {
+                    raw: f64::INFINITY,
+                    components: vec![],
+                };
+            };
+            let cap = cap.max(0.0);
             let hi = user_hi.min(cap).max(user_lo);
             (user_lo, hi)
         }
@@ -245,5 +254,31 @@ mod tests {
         assert!((eval.components[2] - 0.08).abs() < 1.0e-12);
         assert!((eval.components[3] - 0.08).abs() < 1.0e-12);
         assert!(eval.raw.is_finite());
+    }
+
+    #[test]
+    fn image_cap_reference_without_cap_is_non_finite() {
+        let term = RelativeChromaTargetTerm {
+            slot: 0,
+            target: ScalarTarget::Target {
+                value: 0.5,
+                delta: 0.1,
+            },
+            hinge_delta: None,
+            reference: RelativeChromaReference::ImageCap,
+        };
+        let ctx = ctx_with_user_and_cap(
+            Oklch {
+                l: 0.6,
+                c: 0.1,
+                h: 1.0,
+            },
+            0.0,
+            1.0,
+            None,
+        );
+        let eval = evaluate(&term, &ctx);
+        assert!(!eval.raw.is_finite());
+        assert!(eval.components.is_empty());
     }
 }
