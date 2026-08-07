@@ -12,6 +12,20 @@ Chromoxide solves for optimal color palettes given image evidence, slot‑wise h
 - **`chromoxide‑image`** – Image preprocessing, saliency detection, sampling, and support extraction.
 - **`chrox`** – CLI palette generation tool built on top of `chromoxide` and `chromoxide-image`.
 
+## Cap estimation vs. enforcement
+
+Cap construction and cap enforcement are separate:
+
+- `chromoxide-image::CapEstimator` decides how a cap surface is built from image
+  evidence (`MaxObserved` or `Statistical`). The default builds a statistical
+  cap from all prepared pixels, not from the exported 24 samples.
+- `CapPolicy` decides how a slot enforces the already-built cap
+  (`Ignore`, `HardIntersect`, or `SoftPenalty`).
+
+`HardIntersect` never lowers a slot's user `chroma.min`; problems whose required
+minimum exceeds the cap over the whole slot domain are rejected during
+validation.
+
 ## Usage
 
 Add to your `Cargo.toml` (replace the git URL with your own):

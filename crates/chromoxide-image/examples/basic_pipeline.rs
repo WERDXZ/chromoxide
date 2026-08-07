@@ -58,6 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         export: chromoxide_image::ExportConfig::default(),
         cap: Some(CapConfig {
             source: CapSource::PreparedPixels,
+            estimator: chromoxide_image::CapEstimator::MaxObserved,
             builder: ImageCapBuilder::default(),
         }),
     };
@@ -73,9 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("diagnostics: {:?}", support.diagnostics);
     println!("has image_cap: {}", support.image_cap.is_some());
-    println!(
-        "statistical solve hint: chromoxide::CapPolicy::statistical_default() can reuse these samples"
-    );
+    println!("solve hint: use CapPolicy::SoftPenalty over support.image_cap");
 
     Ok(())
 }

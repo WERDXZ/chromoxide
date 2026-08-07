@@ -5,7 +5,7 @@ use crate::color::{Oklab, Oklch};
 use crate::domain::{CapPolicy, SlotDomain};
 use crate::error::PaletteError;
 use crate::problem::SlotSpec;
-use crate::util::sigmoid;
+use crate::util::{EPS, sigmoid};
 
 /// Decoded slot with cap metadata.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -131,7 +131,10 @@ pub fn decode_slot_with_interpolation(
     let user_c_min = domain.chroma.min;
     let user_c_max = domain.chroma.max;
 
-    let cap_at_lh = image_cap.map(|cap| cap.query_with(l, h, cap_interpolation));
+    let cap_at_lh = match domain.cap_policy {
+        CapPolicy::Ignore => None,
+        _ => image_cap.map(|cap| cap.query_with(l, h, cap_interpolation)),
+    };
 
     let (c_min, c_max, effective_cap_limit) = match domain.cap_policy {
         CapPolicy::Ignore => (user_c_min, user_c_max, None),
@@ -142,10 +145,14 @@ pub fn decode_slot_with_interpolation(
                 )
             })?;
             let limit = user_c_max.min(cap);
-            let c_min_eff = user_c_min.min(limit);
-            (c_min_eff, limit, Some(limit))
+            if limit + EPS < user_c_min {
+                return Err(PaletteError::InvalidDomain(format!(
+                    "HardIntersect cap {limit} is below user chroma min {user_c_min}"
+                )));
+            }
+            (user_c_min, limit, Some(limit))
         }
-        CapPolicy::Statistical { .. } => (user_c_min, user_c_max, cap_at_lh),
+        CapPolicy::SoftPenalty { .. } => (user_c_min, user_c_max, cap_at_lh),
     };
 
     let c_span = (c_max - c_min).max(0.0);

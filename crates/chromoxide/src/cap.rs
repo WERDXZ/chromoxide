@@ -3,9 +3,15 @@
 use std::f64::consts::TAU;
 
 use crate::color::{Oklab, Oklch};
+use crate::domain::{HueDomain, Interval};
 use crate::error::PaletteError;
 use crate::support::WeightedSample;
 use crate::util::{EPS, smoothstep01, wrap_hue};
+
+fn circular_close(a: f64, b: f64) -> bool {
+    let d = (wrap_hue(a) - wrap_hue(b)).abs();
+    d.min(TAU - d) <= 1.0e-10
+}
 
 /// Query-time interpolation mode for [`ImageCap`].
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -130,6 +136,17 @@ pub struct StatisticalCapConfig {
     pub use_conditional_hue: bool,
 }
 
+impl Default for StatisticalCapConfig {
+    fn default() -> Self {
+        Self {
+            percentile: 0.95,
+            tolerance_factor: 0.12,
+            smoothing: 1.0,
+            use_conditional_hue: true,
+        }
+    }
+}
+
 impl StatisticalCapConfig {
     /// Small conditional-hue mass threshold used to suppress incidental hue bins.
     pub const CONDITIONAL_HUE_THRESHOLD: f64 = 0.02;
@@ -158,6 +175,16 @@ impl StatisticalCapConfig {
     }
 }
 
+/// Query result for an [`ImageCap`] with per-cell support confidence.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CapQuery {
+    /// Interpolated cap chroma.
+    pub chroma: f64,
+    /// Interpolated support confidence in `[0, 1]`.
+    pub confidence: f64,
+}
+
 /// 2D grid approximation of `c_cap(L, h)`.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
@@ -172,6 +199,12 @@ pub struct ImageCap {
     pub l_max: f64,
     /// Row-major cap values, length `n_l * n_h`.
     pub grid: Vec<f64>,
+    /// Row-major per-cell support confidence, length `n_l * n_h` when populated.
+    ///
+    /// Old serialized caps without this field deserialize as empty, in which
+    /// case queries report confidence `1.0`.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub confidence: Vec<f64>,
     diagnostics: ImageCapDiagnostics,
 }
 
@@ -180,7 +213,8 @@ impl ImageCap {
     ///
     /// This is equivalent to `query_with(..., CapInterpolation::Bilinear)`.
     pub fn query(&self, l: f64, h: f64) -> f64 {
-        self.query_with(l, h, CapInterpolation::default())
+        self.query_with_confidence(l, h, CapInterpolation::default())
+            .chroma
     }
 
     /// Returns cap value at `(L, h)` with custom interpolation mode.
@@ -190,6 +224,19 @@ impl ImageCap {
     /// - `Bilinear` is smooth enough for robust optimization in most cases.
     /// - `BilinearBiased` keeps interpolation local but nudges towards local min/max corners.
     pub fn query_with(&self, l: f64, h: f64, interpolation: CapInterpolation) -> f64 {
+        self.query_with_confidence(l, h, interpolation).chroma
+    }
+
+    /// Returns cap chroma and support confidence at `(L, h)`.
+    ///
+    /// Confidence is interpolated with the same local neighborhood as the cap
+    /// value; `BilinearBiased` uses plain bilinear confidence interpolation.
+    pub fn query_with_confidence(
+        &self,
+        l: f64,
+        h: f64,
+        interpolation: CapInterpolation,
+    ) -> CapQuery {
         let l_span = (self.l_max - self.l_min).max(EPS);
         let l_norm = ((l - self.l_min) / l_span).clamp(0.0, 1.0);
         let h_norm = wrap_hue(h) / TAU;
@@ -209,18 +256,31 @@ impl ImageCap {
         let v01 = self.grid[self.idx(l0, h1)];
         let v10 = self.grid[self.idx(l1, h0)];
         let v11 = self.grid[self.idx(l1, h1)];
+        let c00 = self.confidence_at(l0, h0);
+        let c01 = self.confidence_at(l0, h1);
+        let c10 = self.confidence_at(l1, h0);
+        let c11 = self.confidence_at(l1, h1);
 
         let bilinear = {
             let v0 = v00 * (1.0 - th) + v01 * th;
             let v1 = v10 * (1.0 - th) + v11 * th;
             v0 * (1.0 - tl) + v1 * tl
         };
+        let bilinear_confidence = {
+            let c0 = c00 * (1.0 - th) + c01 * th;
+            let c1 = c10 * (1.0 - th) + c11 * th;
+            c0 * (1.0 - tl) + c1 * tl
+        };
 
         let value = match interpolation {
             CapInterpolation::Nearest => {
                 let li = if tl < 0.5 { l0 } else { l1 };
                 let hi = if th < 0.5 { h0 } else { h1 };
-                self.grid[self.idx(li, hi)]
+                let confidence = self.confidence_at(li, hi);
+                return CapQuery {
+                    chroma: self.grid[self.idx(li, hi)].max(0.0),
+                    confidence,
+                };
             }
             CapInterpolation::Bilinear => bilinear,
             CapInterpolation::BilinearBiased { alpha, curve } => {
@@ -236,7 +296,61 @@ impl ImageCap {
             }
         };
 
-        value.max(0.0)
+        CapQuery {
+            chroma: value.max(0.0),
+            confidence: bilinear_confidence.clamp(0.0, 1.0),
+        }
+    }
+
+    /// Conservative minimum cap over a slot's full `(L, h)` domain.
+    ///
+    /// Samples the domain boundaries plus every cap grid coordinate that falls
+    /// inside the domain, then returns the minimum queried cap value.
+    pub fn min_over_domain(
+        &self,
+        lightness: Interval,
+        hue: HueDomain,
+        interpolation: CapInterpolation,
+    ) -> f64 {
+        let l_span = (self.l_max - self.l_min).max(EPS);
+        let mut ls = vec![lightness.min, lightness.max];
+        for i in 0..self.n_l {
+            let l = self.l_min + l_span * (i as f64 / (self.n_l - 1) as f64);
+            if l >= lightness.min && l <= lightness.max {
+                ls.push(l);
+            }
+        }
+        ls.sort_by(f64::total_cmp);
+        ls.dedup_by(|a, b| (*a - *b).abs() <= 1.0e-10);
+
+        let mut hs: Vec<f64> = Vec::new();
+        match hue {
+            HueDomain::Any => {
+                for i in 0..self.n_h {
+                    hs.push(TAU * (i as f64 / self.n_h as f64));
+                }
+            }
+            HueDomain::Arc { start, len } => {
+                hs.push(wrap_hue(start));
+                hs.push(wrap_hue(start + len));
+                for i in 0..self.n_h {
+                    let h = TAU * (i as f64 / self.n_h as f64);
+                    if hue.contains(h) {
+                        hs.push(h);
+                    }
+                }
+            }
+        }
+        hs.sort_by(f64::total_cmp);
+        hs.dedup_by(|a, b| circular_close(*a, *b));
+
+        let mut min_v = f64::INFINITY;
+        for &l in &ls {
+            for &h in &hs {
+                min_v = min_v.min(self.query_with(l, h, interpolation));
+            }
+        }
+        min_v.max(0.0)
     }
 
     /// Returns builder diagnostics.
@@ -255,6 +369,14 @@ impl ImageCap {
     /// Returns row-major grid index for `(l, h)`.
     fn idx(&self, l: usize, h: usize) -> usize {
         l * self.n_h + h
+    }
+
+    fn confidence_at(&self, l: usize, h: usize) -> f64 {
+        if self.confidence.len() == self.grid.len() {
+            self.confidence[self.idx(l, h)].clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
     }
 }
 
@@ -313,10 +435,29 @@ impl ImageCapBuilder {
         samples: &[WeightedSample],
         config: StatisticalCapConfig,
     ) -> Result<ImageCap, PaletteError> {
+        self.build_statistical_from_weighted_oklab(
+            || samples.iter().map(|sample| (sample.lab, sample.weight)),
+            config,
+        )
+    }
+
+    /// Builds a statistical image cap from a weighted Oklab iterator factory.
+    ///
+    /// Each iterator item is `(Oklab, weight)`. `make_iter` is called twice
+    /// (once for lightness bounds, once for binning), so callers can stream
+    /// prepared pixels without allocating a `Vec<WeightedSample>`.
+    pub fn build_statistical_from_weighted_oklab<F, I>(
+        &self,
+        make_iter: F,
+        config: StatisticalCapConfig,
+    ) -> Result<ImageCap, PaletteError>
+    where
+        F: Fn() -> I,
+        I: Iterator<Item = (Oklab, f64)>,
+    {
         config.validate()?;
         self.validate_builder()?;
-        let sample_iter = || samples.iter().map(|sample| sample.lab);
-        let (l_min, l_max) = lightness_bounds(&sample_iter)?;
+        let (l_min, l_max) = weighted_lightness_bounds(&make_iter)?;
         let l_span = (l_max - l_min).max(EPS);
 
         let cell_count = self.n_l * self.n_h;
@@ -324,43 +465,53 @@ impl ImageCapBuilder {
         let mut hue_mass = vec![0.0; cell_count];
         let mut row_mass = vec![0.0; self.n_l];
 
-        for sample in samples {
-            let lch = Oklch::from_oklab(sample.lab);
+        for (lab, weight) in make_iter() {
+            let lch = Oklch::from_oklab(lab);
             let li = (((lch.l - l_min) / l_span).clamp(0.0, 1.0) * (self.n_l - 1) as f64).floor()
                 as usize;
             let hi = ((wrap_hue(lch.h) / TAU) * self.n_h as f64).floor() as usize % self.n_h;
             let idx = li * self.n_h + hi;
-            let weight = sample.weight.max(0.0);
+            let weight = weight.max(0.0);
             cells[idx].push((lch.c.max(0.0), weight));
             hue_mass[idx] += weight;
             row_mass[li] += weight;
         }
 
         let mut grid = vec![f64::NAN; cell_count];
-        for li in 0..self.n_l {
-            let row_total = row_mass[li];
+        let mut confidence = vec![0.0; cell_count];
+        for (li, &row_total) in row_mass.iter().enumerate() {
             for hi in 0..self.n_h {
                 let idx = li * self.n_h + hi;
                 if cells[idx].is_empty() {
                     continue;
                 }
-                if config.use_conditional_hue && row_total > 0.0 {
-                    let hue_probability = hue_mass[idx] / row_total;
-                    if hue_probability < StatisticalCapConfig::CONDITIONAL_HUE_THRESHOLD {
-                        continue;
-                    }
+                let cell_confidence = if row_total > 0.0 {
+                    (hue_mass[idx] / row_total).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                if config.use_conditional_hue
+                    && cell_confidence < StatisticalCapConfig::CONDITIONAL_HUE_THRESHOLD
+                {
+                    confidence[idx] = 0.0;
+                    continue;
                 }
+                confidence[idx] = cell_confidence;
                 grid[idx] = weighted_percentile(&mut cells[idx], config.percentile);
             }
         }
 
-        Ok(self.finish_grid(
-            grid,
-            config.tolerance_factor,
-            config.smoothing,
-            l_min,
-            l_max,
-        ))
+        if config.use_conditional_hue {
+            Ok(self.finish_conditional_grid(grid, confidence, config, l_min, l_max))
+        } else {
+            Ok(self.finish_grid_with_confidence(
+                grid,
+                config.tolerance_factor,
+                config.smoothing,
+                l_min,
+                l_max,
+            ))
+        }
     }
 
     /// Builds an image cap from an Oklab iterator factory.
@@ -390,7 +541,7 @@ impl ImageCapBuilder {
             }
         }
 
-        Ok(self.finish_grid(grid, self.relax - 1.0, 1.0, l_min, l_max))
+        Ok(self.finish_grid_with_confidence(grid, self.relax - 1.0, 1.0, l_min, l_max))
     }
 
     fn validate_builder(&self) -> Result<(), PaletteError> {
@@ -407,7 +558,7 @@ impl ImageCapBuilder {
         Ok(())
     }
 
-    fn finish_grid(
+    fn finish_grid_with_confidence(
         &self,
         mut grid: Vec<f64>,
         tolerance_factor: f64,
@@ -454,6 +605,83 @@ impl ImageCapBuilder {
             l_min,
             l_max,
             grid: smoothed,
+            confidence: vec![1.0; self.n_l * self.n_h],
+            diagnostics: ImageCapDiagnostics {
+                empty_cells,
+                mean_before_smooth,
+                max_before_smooth,
+                mean_after_smooth,
+                max_after_smooth,
+            },
+        }
+    }
+
+    fn finish_conditional_grid(
+        &self,
+        mut grid: Vec<f64>,
+        mut confidence: Vec<f64>,
+        config: StatisticalCapConfig,
+        l_min: f64,
+        l_max: f64,
+    ) -> ImageCap {
+        let empty_cells = grid.iter().filter(|v| v.is_nan()).count();
+        for v in &mut grid {
+            if v.is_nan() {
+                *v = 0.0;
+            }
+        }
+        for v in &mut confidence {
+            if !v.is_finite() {
+                *v = 0.0;
+            } else {
+                *v = v.clamp(0.0, 1.0);
+            }
+        }
+
+        // The support gate must use each cell's own pre-smoothing confidence;
+        // otherwise a low-support hue could borrow full chroma from neighbors
+        // through confidence-weighted smoothing.
+        let gate_confidence = confidence.clone();
+
+        let (mean_before_smooth, max_before_smooth) = stats(&grid);
+
+        if self.smooth_h_radius > 0 {
+            (grid, confidence) = smooth_h_conf_weighted(
+                &grid,
+                &confidence,
+                self.n_l,
+                self.n_h,
+                self.smooth_h_radius,
+            );
+        }
+        if self.smooth_l_radius > 0 {
+            (grid, confidence) = smooth_l_conf_weighted(
+                &grid,
+                &confidence,
+                self.n_l,
+                self.n_h,
+                self.smooth_l_radius,
+            );
+        }
+
+        for (cap, conf) in grid.iter_mut().zip(gate_confidence.iter()) {
+            let gate = smoothstep01(conf / StatisticalCapConfig::CONDITIONAL_HUE_THRESHOLD);
+            *cap *= gate;
+        }
+
+        let scale = (1.0 + config.tolerance_factor).max(0.0);
+        for v in &mut grid {
+            *v = (*v * scale).max(0.0);
+        }
+        let (mean_after_smooth, max_after_smooth) = stats(&grid);
+
+        ImageCap {
+            n_l: self.n_l,
+            n_h: self.n_h,
+            l_min,
+            l_max,
+            grid,
+            confidence,
             diagnostics: ImageCapDiagnostics {
                 empty_cells,
                 mean_before_smooth,
@@ -474,6 +702,35 @@ where
     let mut l_max = f64::NEG_INFINITY;
     let mut has_any = false;
     for lab in make_iter() {
+        has_any = true;
+        l_min = l_min.min(lab.l);
+        l_max = l_max.max(lab.l);
+    }
+    if !has_any {
+        return Err(PaletteError::EmptySamples);
+    }
+
+    if !l_min.is_finite() || !l_max.is_finite() {
+        return Err(PaletteError::NumericInstability(
+            "non-finite sample lightness".to_string(),
+        ));
+    }
+    if (l_max - l_min).abs() < 1.0e-6 {
+        l_min = (l_min - 1.0e-3).max(0.0);
+        l_max = (l_max + 1.0e-3).min(1.0);
+    }
+    Ok((l_min, l_max))
+}
+
+fn weighted_lightness_bounds<F, I>(make_iter: &F) -> Result<(f64, f64), PaletteError>
+where
+    F: Fn() -> I,
+    I: Iterator<Item = (Oklab, f64)>,
+{
+    let mut l_min = f64::INFINITY;
+    let mut l_max = f64::NEG_INFINITY;
+    let mut has_any = false;
+    for (lab, _) in make_iter() {
         has_any = true;
         l_min = l_min.min(lab.l);
         l_max = l_max.max(lab.l);
@@ -638,4 +895,79 @@ fn smooth_l(grid: &[f64], n_l: usize, n_h: usize, radius: usize) -> Vec<f64> {
         }
     }
     out
+}
+
+/// Confidence-weighted smoothing along circular hue.
+///
+/// Cap values are averaged with neighbor confidence as weight; confidence is
+/// averaged with an ordinary box mean.
+fn smooth_h_conf_weighted(
+    grid: &[f64],
+    confidence: &[f64],
+    n_l: usize,
+    n_h: usize,
+    radius: usize,
+) -> (Vec<f64>, Vec<f64>) {
+    let mut out_cap = vec![0.0; grid.len()];
+    let mut out_conf = vec![0.0; grid.len()];
+    let width = 2 * radius + 1;
+    for l in 0..n_l {
+        for h in 0..n_h {
+            let mut numerator = 0.0;
+            let mut denominator = 0.0;
+            let mut conf_sum = 0.0;
+            for d in 0..width {
+                let ofs = d as isize - radius as isize;
+                let hh = ((h as isize + ofs).rem_euclid(n_h as isize)) as usize;
+                let idx = l * n_h + hh;
+                let conf = confidence[idx].max(0.0);
+                numerator += grid[idx] * conf;
+                denominator += conf;
+                conf_sum += conf;
+            }
+            out_cap[l * n_h + h] = if denominator > EPS {
+                numerator / denominator
+            } else {
+                0.0
+            };
+            out_conf[l * n_h + h] = (conf_sum / width as f64).clamp(0.0, 1.0);
+        }
+    }
+    (out_cap, out_conf)
+}
+
+/// Confidence-weighted smoothing along clamped lightness.
+fn smooth_l_conf_weighted(
+    grid: &[f64],
+    confidence: &[f64],
+    n_l: usize,
+    n_h: usize,
+    radius: usize,
+) -> (Vec<f64>, Vec<f64>) {
+    let mut out_cap = vec![0.0; grid.len()];
+    let mut out_conf = vec![0.0; grid.len()];
+    let width = 2 * radius + 1;
+    for l in 0..n_l {
+        for h in 0..n_h {
+            let mut numerator = 0.0;
+            let mut denominator = 0.0;
+            let mut conf_sum = 0.0;
+            for d in 0..width {
+                let ofs = d as isize - radius as isize;
+                let ll = (l as isize + ofs).clamp(0, n_l as isize - 1) as usize;
+                let idx = ll * n_h + h;
+                let conf = confidence[idx].max(0.0);
+                numerator += grid[idx] * conf;
+                denominator += conf;
+                conf_sum += conf;
+            }
+            out_cap[l * n_h + h] = if denominator > EPS {
+                numerator / denominator
+            } else {
+                0.0
+            };
+            out_conf[l * n_h + h] = (conf_sum / width as f64).clamp(0.0, 1.0);
+        }
+    }
+    (out_cap, out_conf)
 }

@@ -29,6 +29,19 @@ pub enum PaletteError {
     #[error("empty feasible image cap")]
     EmptyFeasibleCap,
 
+    /// Hard cap available at a slot domain is below the user's chroma minimum.
+    #[error(
+        "infeasible hard cap for slot `{slot}`: required chroma min {required_min} exceeds available cap {available_max}"
+    )]
+    InfeasibleHardCap {
+        /// Slot name.
+        slot: String,
+        /// User chroma minimum that cannot be met.
+        required_min: f64,
+        /// Maximum cap available over the slot domain.
+        available_max: f64,
+    },
+
     /// Numerical instability during objective/gradient evaluation.
     #[error("numeric instability: {0}")]
     NumericInstability(String),

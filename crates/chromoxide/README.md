@@ -13,6 +13,20 @@ It optimizes slot colors in continuous `Oklab/OkLCh` space using:
 
 The crate focuses on optimization core behavior and diagnostics.
 
+## Cap handling
+
+`chromoxide` consumes a prebuilt `ImageCap`; it never estimates image statistics
+from `problem.samples`. Slots choose how to enforce that cap:
+
+- `Ignore` - no cap lookup
+- `HardIntersect` - decode chroma into `[user_min, min(user_max, cap)]`; the
+  user minimum is never lowered, and infeasible domains fail validation
+- `SoftPenalty { weight, huber_delta }` - decode with the user interval and add
+  `weight * pseudo_huber(max(0, C - cap), huber_delta)` to the objective
+
+Relative chroma targets can reference the user domain, the decoded effective
+domain, or the image cap directly via `RelativeChromaReference`.
+
 ## Quick start
 
 ```rust

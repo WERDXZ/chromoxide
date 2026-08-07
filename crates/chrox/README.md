@@ -63,6 +63,11 @@ Notes:
 - template `input` paths are resolved relative to the config file
 - relative template `output` paths are resolved from your home directory
 - palette search paths come from `[general].palettes` plus CLI `--palettes`
+- the default image config caps the working image longest side at 256 pixels
+  and builds a statistical cap from prepared pixels (`CapEstimator::Statistical`
+  with `CapSource::PreparedPixels`)
+- user palettes can use `cap_policy = "Ignore"`, `"HardIntersect"`, or
+  `"SoftPenalty"`; cap surfaces are always prebuilt by the image pipeline
 
 ## User palettes
 

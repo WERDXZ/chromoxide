@@ -1,6 +1,7 @@
 use chromoxide::{
-    CapPolicy, HueDomain, Interval, PaletteProblem, RelativeChromaTargetTerm, ScalarTarget,
-    SlotDomain, SlotSpec, Term, WeightedSample, WeightedTerm,
+    CapPolicy, HueDomain, Interval, PaletteProblem, RelativeChromaReference,
+    RelativeChromaTargetTerm, ScalarTarget, SlotDomain, SlotSpec, Term, WeightedSample,
+    WeightedTerm,
 };
 
 fn one_slot_problem(term: Term) -> PaletteProblem {
@@ -40,6 +41,7 @@ fn relative_chroma(target: ScalarTarget) -> Term {
         slot: 0,
         target,
         hinge_delta: None,
+        reference: Default::default(),
     })
 }
 
@@ -75,4 +77,22 @@ fn saliency_support_scale_must_be_positive() {
     }));
     let err = problem.validate().unwrap_err().to_string();
     assert!(err.contains("SaliencyTerm.support_scale"));
+}
+
+#[test]
+fn image_cap_reference_requires_image_cap() {
+    let problem = one_slot_problem(Term::RelativeChromaTarget(RelativeChromaTargetTerm {
+        slot: 0,
+        target: ScalarTarget::Target {
+            value: 0.5,
+            delta: 0.1,
+        },
+        hinge_delta: None,
+        reference: RelativeChromaReference::ImageCap,
+    }));
+    let err = problem.validate().unwrap_err().to_string();
+    assert!(
+        err.contains("RelativeChromaReference::ImageCap"),
+        "unexpected error: {err}"
+    );
 }

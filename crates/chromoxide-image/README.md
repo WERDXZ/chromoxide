@@ -31,8 +31,14 @@ This crate handles image I/O and support extraction. It does **not** implement:
   - `FarthestPointLab`
   - `KMeansPlusPlusLab`
 - assignment/export to `WeightedSample`
-- optional `ImageCap` build via `chromoxide::ImageCapBuilder`
+- optional `ImageCap` build via `CapEstimator` + `chromoxide::ImageCapBuilder`
 - diagnostics and saliency debug rendering (`saliency_to_luma_image`)
+
+`CapConfig` defaults to `PreparedPixels + Statistical`, so the cap is estimated
+from every prepared valid pixel (alpha-weighted), not from the exported k-means
+samples. `MaxObserved` is also available for the classic maximum-chroma surface.
+With `use_conditional_hue`, low-support hue cells are gated by confidence after
+confidence-weighted smoothing instead of being restored by nearest-fill.
 
 ## Quick start
 

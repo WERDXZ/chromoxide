@@ -110,6 +110,7 @@ pub use term::{
     ChromaTargetTerm, ContrastTerm, CoverTerm, DeltaCTarget, DeltaHTarget, DeltaLTarget, GroupAxis,
     GroupMember, GroupQuantileTerm, GroupTarget, HueTargetTerm, HueUnaryTarget,
     LightnessTargetTerm, Monotonicity, OrderRelation, PairDeltaCTerm, PairDeltaHTerm,
-    PairDeltaLTerm, PairDistanceTerm, PairOrderTerm, QuantileKnot, RelativeChromaTargetTerm,
-    SaliencyTarget, SaliencyTerm, ScalarTarget, SupportTerm, Term, WeightedTerm,
+    PairDeltaLTerm, PairDistanceTerm, PairOrderTerm, QuantileKnot, RelativeChromaReference,
+    RelativeChromaTargetTerm, SaliencyTarget, SaliencyTerm, ScalarTarget, SupportTerm, Term,
+    WeightedTerm,
 };

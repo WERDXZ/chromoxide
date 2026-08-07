@@ -166,6 +166,17 @@ The scalar target is applied to `ratio` (not to absolute chroma), so
 `Target { value: 0.9, ... }` means "90% of the slot's feasible chroma interval"
 instead of an impossible absolute target like `C = 1.0`.
 
+The reference interval is explicit:
+
+- `UserDomain` - `[user chroma min, user chroma max]`
+- `EffectiveDecodeDomain` - the decoded effective interval (default; for
+  `HardIntersect` this is the cap-intersected interval, otherwise the user
+  interval)
+- `ImageCap` - `[user min, max(user min, min(user max, image_cap(L, h)))]`
+
+`ImageCap` requires `problem.image_cap`; validation rejects the problem
+otherwise instead of silently falling back.
+
 References:
 
 - Huber loss: <https://en.wikipedia.org/wiki/Huber_loss>
@@ -187,15 +198,21 @@ Important parameters:
 - `chroma_epsilon`
   - below this, hue-sensitive behavior is softened
 - `cap_policy`
-  - `Ignore`, `HardIntersect`, or `Statistical`
-- `percentile`
-  - weighted per-cell chroma cutoff used by `Statistical`
-- `tolerance_factor`
-  - headroom applied after percentile estimation so bright outliers do not fully determine the cap
-- `use_conditional_hue`
-  - restricts the cap to hue bins that carry meaningful mass at a given lightness
+  - how a slot enforces an already-built cap: `Ignore`, `HardIntersect`, or
+    `SoftPenalty { weight, huber_delta }`
 - `cap_interpolation`
   - how cap values are queried from the cap surface
+
+`HardIntersect` decodes chroma into
+`[user_min, min(user_max, image_cap(L, h))]` and never lowers `user_min`; a slot
+whose required minimum exceeds the minimum cap over its whole domain is
+rejected during `PaletteProblem::validate` (`min_over_domain`). `SoftPenalty`
+keeps the user chroma interval for decoding and adds
+`weight * pseudo_huber(max(0, C - cap), huber_delta)` to the objective.
+
+How the cap surface is constructed is a separate concern handled by
+`chromoxide-image::CapEstimator` (see 6.5); `CapPolicy` never estimates
+statistics from samples.
 
 ## 6. Image pipeline
 
@@ -334,25 +351,46 @@ References:
 
 ### 6.5 Image cap
 
-The cap builder estimates plausible chroma as a function of lightness and hue.
+`CapEstimator` decides how the cap surface is constructed from image evidence:
 
-The baseline builder records the maximum observed chroma in each `(L, h)` bin. The
-statistical builder instead records a weighted percentile per bin, then fills holes and
-smooths the grid exactly like the max-based builder. This keeps the cap faithful to the
-observed image volume without letting one extreme pixel dominate an entire band.
+- `MaxObserved` records the maximum chroma per `(L, h)` cell.
+- `Statistical(StatisticalCapConfig)` records a weighted percentile per cell.
 
-When `use_conditional_hue` is enabled, low-mass hue bins are suppressed separately within
-each lightness row before hole filling. This matters for images whose vivid accents only
-appear in specific lightness ranges: a bright pink hair highlight should not automatically
-raise the allowed chroma for mid-lightness skin hues just because both colors exist
-somewhere in the image.
+`CapConfig` defaults to `PreparedPixels + Statistical`, so the statistical cap is
+built from **all prepared valid pixels** (with their alpha as weight), not from
+the 24 exported k-means samples.
 
 Important parameters:
 
 - `source`
   - whether cap is built from prepared pixels or exported samples
+- `estimator`
+  - `MaxObserved` or `Statistical`
+- `percentile`
+  - weighted per-cell chroma cutoff used by the statistical estimator
+- `tolerance_factor`
+  - headroom applied after percentile estimation
+- `smoothing`
+  - cap smoothing blend for the non-conditional statistical path
+- `use_conditional_hue`
+  - whether low-mass hue bins are suppressed within each lightness row
 - `builder.*`
   - cap-builder-specific parameters from `chromoxide`
+
+### 6.5.1 Conditional hue confidence
+
+Every cap cell carries a support confidence
+`cell_mass / row_mass` (clamped to `[0, 1]`). With `use_conditional_hue`, cells
+below `StatisticalCapConfig::CONDITIONAL_HUE_THRESHOLD` get cap `0` and
+confidence `0`, and hue nearest-fill is **not** used. Smoothing is
+confidence-weighted normalized smoothing, and afterwards each cell is gated by
+`smoothstep01(confidence / threshold)` using its own pre-smoothing confidence,
+so a low-support hue cannot borrow full chroma from a neighboring hue. The
+tolerance factor is applied last.
+
+Each `ImageCap` stores the smoothed confidence grid and exposes it through
+`query_with_confidence`; old serialized caps without a confidence grid report
+confidence `1.0`.
 
 ## 7. Builtin export pipeline
 
@@ -381,7 +419,10 @@ Examples:
 `chrox`'s default image config now uses
 `KMeansPlusPlusLab { count = 24, candidate_stride = 2, saliency_bias = 0.35,
 max_iters = 20, convergence_tol = 1e-5 }`. `FarthestPointLab` remains available
-and existing configs that select it still parse.
+and existing configs that select it still parse. The CLI default also caps the
+working image longest side at `256` pixels so Lloyd refinement does not run
+billions of distance computations on 1080p/4K images; library users can still
+choose the full resolution by leaving `max_working_dim` unset.
 
 ## 9. Contrast and formatting
 

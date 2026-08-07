@@ -1,6 +1,6 @@
 //! `ImageCap` build bridge to `chromoxide::ImageCapBuilder`.
 
-use crate::config::{CapConfig, CapSource};
+use crate::config::{CapConfig, CapEstimator, CapSource};
 use crate::error::ImagePipelineError;
 use crate::prepared::PreparedImage;
 use crate::saliency::SaliencyMap;
@@ -23,14 +23,16 @@ pub fn build_image_cap(
         ));
     }
 
-    let built = match cfg.source {
-        CapSource::PreparedPixels => cfg.builder.build_from_oklab(|| {
-            prepared
-                .valid_indices
-                .iter()
-                .map(|&idx| prepared.pixels[idx].lab)
-        }),
-        CapSource::ExportedSamples => {
+    let built = match (&cfg.source, &cfg.estimator) {
+        (CapSource::PreparedPixels, CapEstimator::MaxObserved) => {
+            cfg.builder.build_from_oklab(|| {
+                prepared
+                    .valid_indices
+                    .iter()
+                    .map(|&idx| prepared.pixels[idx].lab)
+            })
+        }
+        (CapSource::ExportedSamples, CapEstimator::MaxObserved) => {
             let samples = exported_samples.ok_or_else(|| {
                 ImagePipelineError::InvalidConfig(
                     "cap source is ExportedSamples but exported_samples is None".to_string(),
@@ -38,6 +40,25 @@ pub fn build_image_cap(
             })?;
             cfg.builder
                 .build_from_oklab(|| samples.iter().map(|sample| sample.lab))
+        }
+        (CapSource::PreparedPixels, CapEstimator::Statistical(config)) => {
+            cfg.builder.build_statistical_from_weighted_oklab(
+                || {
+                    prepared.valid_indices.iter().map(|&idx| {
+                        let px = prepared.pixels[idx];
+                        (px.lab, px.alpha)
+                    })
+                },
+                *config,
+            )
+        }
+        (CapSource::ExportedSamples, CapEstimator::Statistical(config)) => {
+            let samples = exported_samples.ok_or_else(|| {
+                ImagePipelineError::InvalidConfig(
+                    "cap source is ExportedSamples but exported_samples is None".to_string(),
+                )
+            })?;
+            cfg.builder.build_statistical(samples, *config)
         }
     };
 

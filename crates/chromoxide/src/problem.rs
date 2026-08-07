@@ -6,7 +6,7 @@ use crate::cap::{CapInterpolation, ImageCap};
 use crate::domain::{CapPolicy, SlotDomain};
 use crate::error::PaletteError;
 use crate::support::WeightedSample;
-use crate::term::{GroupAxis, Term, WeightedTerm};
+use crate::term::{GroupAxis, RelativeChromaReference, Term, WeightedTerm};
 use crate::terms::group_quantile::{compute_mass_quantile_centers, compute_targets};
 
 /// Slot specification.
@@ -132,24 +132,37 @@ impl PaletteProblem {
             }
         }
 
-        let any_hard = self
-            .slots
-            .iter()
-            .any(|s| matches!(s.domain.cap_policy, CapPolicy::HardIntersect));
-        if any_hard && self.image_cap.is_none() {
+        let uses_cap = self.slots.iter().any(|slot| {
+            matches!(
+                slot.domain.cap_policy,
+                CapPolicy::HardIntersect | CapPolicy::SoftPenalty { .. }
+            )
+        });
+        if uses_cap && self.image_cap.is_none() {
             return Err(PaletteError::InvalidProblem(
-                "at least one hard-intersect slot requires image_cap but problem.image_cap is None"
+                "HardIntersect or SoftPenalty slots require problem.image_cap to be present"
                     .to_string(),
             ));
         }
-        if any_hard {
-            let cap = self.image_cap.as_ref().ok_or_else(|| {
-                PaletteError::InvalidProblem(
-                    "HardIntersect requires image_cap to be present".to_string(),
-                )
-            })?;
-            if cap.max_cap() <= 0.0 {
-                return Err(PaletteError::EmptyFeasibleCap);
+        if let Some(cap) = self.image_cap.as_ref() {
+            for slot in &self.slots {
+                if slot.domain.cap_policy == CapPolicy::HardIntersect {
+                    if cap.max_cap() <= 0.0 {
+                        return Err(PaletteError::EmptyFeasibleCap);
+                    }
+                    let min_cap = cap.min_over_domain(
+                        slot.domain.lightness,
+                        slot.domain.hue,
+                        self.config.cap_interpolation,
+                    );
+                    if min_cap + 1.0e-10 < slot.domain.chroma.min {
+                        return Err(PaletteError::InfeasibleHardCap {
+                            slot: slot.name.clone(),
+                            required_min: slot.domain.chroma.min,
+                            available_max: min_cap,
+                        });
+                    }
+                }
             }
         }
 
@@ -160,7 +173,7 @@ impl PaletteProblem {
                     "term weights must be finite and >= 0".to_string(),
                 ));
             }
-            validate_term(&wt.term, n_slots)?;
+            validate_term(&wt.term, n_slots, self.image_cap.is_some())?;
         }
 
         Ok(())
@@ -226,7 +239,7 @@ fn validate_scalar_target(
 }
 
 /// Validates a single term payload against global problem shape/rules.
-fn validate_term(term: &Term, n_slots: usize) -> Result<(), PaletteError> {
+fn validate_term(term: &Term, n_slots: usize, has_image_cap: bool) -> Result<(), PaletteError> {
     match term {
         Term::Cover(t) => {
             if t.slots.is_empty() {
@@ -272,6 +285,12 @@ fn validate_term(term: &Term, n_slots: usize) -> Result<(), PaletteError> {
             validate_slot_index(t.slot, n_slots, "RelativeChromaTargetTerm.slot")?;
             validate_relative_chroma_target(&t.target)?;
             validate_hinge_delta(t.hinge_delta, "RelativeChromaTargetTerm.hinge_delta")?;
+            if t.reference == RelativeChromaReference::ImageCap && !has_image_cap {
+                return Err(PaletteError::InvalidProblem(
+                    "RelativeChromaTargetTerm with RelativeChromaReference::ImageCap requires problem.image_cap"
+                        .to_string(),
+                ));
+            }
         }
         Term::HueTarget(t) => {
             validate_slot_index(t.slot, n_slots, "HueTargetTerm.slot")?;

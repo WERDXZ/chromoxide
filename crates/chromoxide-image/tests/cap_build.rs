@@ -1,7 +1,7 @@
 use chromoxide::ImageCapBuilder;
 use chromoxide_image::{
-    CapConfig, CapSource, PreprocessConfig, ResizeFilter, SaliencyConfig, build_image_cap,
-    compute_saliency, prepare_image,
+    CapConfig, CapEstimator, CapSource, PreprocessConfig, ResizeFilter, SaliencyConfig,
+    build_image_cap, compute_saliency, prepare_image,
 };
 use image::{DynamicImage, Rgba, RgbaImage};
 
@@ -36,6 +36,7 @@ fn can_build_image_cap_from_prepared_pixels() {
         None,
         &CapConfig {
             source: CapSource::PreparedPixels,
+            estimator: CapEstimator::MaxObserved,
             builder: ImageCapBuilder::default(),
         },
     )

@@ -285,12 +285,24 @@ pub enum CenterMode {
     Medoid,
 }
 
+/// Cap estimation method used to construct an `ImageCap` from image evidence.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug, PartialEq)]
+pub enum CapEstimator {
+    /// Record the maximum observed chroma per `(L, h)` cell.
+    MaxObserved,
+    /// Build a percentile-based, optionally conditional-hue-aware cap surface.
+    Statistical(chromoxide::StatisticalCapConfig),
+}
+
 /// Configuration for optional `ImageCap` construction.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 pub struct CapConfig {
     /// Source data used to build the cap.
     pub source: CapSource,
+    /// Estimation method used to construct the cap surface.
+    pub estimator: CapEstimator,
     /// Reused `chromoxide` cap builder.
     pub builder: chromoxide::ImageCapBuilder,
 }
@@ -299,6 +311,7 @@ impl Default for CapConfig {
     fn default() -> Self {
         Self {
             source: CapSource::PreparedPixels,
+            estimator: CapEstimator::Statistical(chromoxide::StatisticalCapConfig::default()),
             builder: chromoxide::ImageCapBuilder::default(),
         }
     }

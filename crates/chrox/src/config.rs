@@ -169,6 +169,10 @@ fn resolve_output_path(base_dir: &Path, path: &Path) -> PathBuf {
 
 pub fn default_image_config() -> ImagePipelineConfig {
     ImagePipelineConfig {
+        preprocess: chromoxide_image::PreprocessConfig {
+            max_working_dim: Some(NonZeroU32::new(256).expect("256 is non-zero")),
+            ..Default::default()
+        },
         saliency: SaliencyConfig {
             method: SaliencyMethod::LocalContrast(LocalContrastConfig::default()),
         },
@@ -382,6 +386,10 @@ keep_top_k = 3
     #[test]
     fn default_image_config_matches_cli_pipeline_defaults() {
         let config = Config::default();
+        assert_eq!(
+            config.image.preprocess.max_working_dim.map(|v| v.get()),
+            Some(256)
+        );
         match &config.image.saliency.method {
             chromoxide_image::SaliencyMethod::LocalContrast(cfg) => {
                 assert_eq!(cfg.blur_radius, 3);
@@ -397,6 +405,16 @@ keep_top_k = 3
                 assert_eq!(cfg.convergence_tol, 1.0e-5);
             }
             _ => panic!("expected k-means++ sampling"),
+        }
+        match &config.image.cap {
+            Some(cap) => {
+                assert_eq!(cap.source, chromoxide_image::CapSource::PreparedPixels);
+                assert!(matches!(
+                    &cap.estimator,
+                    chromoxide_image::CapEstimator::Statistical(_)
+                ));
+            }
+            None => panic!("expected default image cap config"),
         }
         assert!(config.image.cap.is_some());
     }

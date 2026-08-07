@@ -22,6 +22,16 @@ pub struct EvalContext<'a> {
     pub chroma_lower_bounds: &'a [f64],
     /// Effective upper chroma bound per slot (used by relative chroma terms).
     pub chroma_upper_bounds: &'a [f64],
+    /// User-configured lower chroma bound per slot.
+    pub user_chroma_lower_bounds: &'a [f64],
+    /// User-configured upper chroma bound per slot.
+    pub user_chroma_upper_bounds: &'a [f64],
+    /// Decoded effective lower chroma bound per slot.
+    pub effective_chroma_lower_bounds: &'a [f64],
+    /// Decoded effective upper chroma bound per slot.
+    pub effective_chroma_upper_bounds: &'a [f64],
+    /// Image cap chroma at each slot's solved `(L, h)`, when a cap exists.
+    pub image_cap_chroma_upper_bounds: &'a [Option<f64>],
     /// Support samples.
     pub samples: &'a [WeightedSample],
 }
@@ -306,6 +316,21 @@ pub struct ChromaTargetTerm {
     pub hinge_delta: Option<f64>,
 }
 
+/// Reference interval used by [`RelativeChromaTargetTerm`].
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RelativeChromaReference {
+    /// Ratio relative to the slot's user-configured chroma interval.
+    UserDomain,
+    /// Ratio relative to the decoded effective interval (user interval after
+    /// any hard-cap intersection).
+    #[default]
+    EffectiveDecodeDomain,
+    /// Ratio relative to the image-supported upper bound
+    /// `min(user_max, image_cap(L, h))`, floored at the user minimum.
+    ImageCap,
+}
+
 /// Relative chroma preference for a single slot.
 ///
 /// The value is the position of the slot's chroma inside its effective
@@ -321,6 +346,9 @@ pub struct RelativeChromaTargetTerm {
     pub target: ScalarTarget,
     /// Optional pseudo-Huber delta used only for hinge-style targets.
     pub hinge_delta: Option<f64>,
+    /// Reference interval for the relative ratio.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub reference: RelativeChromaReference,
 }
 
 /// Unary hue target for a single slot.

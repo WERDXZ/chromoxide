@@ -26,6 +26,9 @@ fn make_ctx(slots_lch: &[Oklch], hue_gates: &[f64]) -> EvalContext<'static> {
     let gates = Box::leak(hue_gates.to_vec().into_boxed_slice());
     let lower = Box::leak(vec![0.0; slots_lch.len()].into_boxed_slice());
     let upper = Box::leak(vec![1.0; slots_lch.len()].into_boxed_slice());
+    let user_lower = Box::leak(vec![0.0; slots_lch.len()].into_boxed_slice());
+    let user_upper = Box::leak(vec![1.0; slots_lch.len()].into_boxed_slice());
+    let cap_bounds = Box::leak(vec![None; slots_lch.len()].into_boxed_slice());
     EvalContext {
         slots_lab: labs,
         slots_lch: lch,
@@ -33,6 +36,11 @@ fn make_ctx(slots_lch: &[Oklch], hue_gates: &[f64]) -> EvalContext<'static> {
         hue_gates: gates,
         chroma_lower_bounds: lower,
         chroma_upper_bounds: upper,
+        user_chroma_lower_bounds: user_lower,
+        user_chroma_upper_bounds: user_upper,
+        effective_chroma_lower_bounds: lower,
+        effective_chroma_upper_bounds: upper,
+        image_cap_chroma_upper_bounds: cap_bounds,
         samples: &[],
     }
 }

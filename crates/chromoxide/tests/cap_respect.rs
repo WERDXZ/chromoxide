@@ -1,9 +1,9 @@
 use std::num::{NonZeroU64, NonZeroUsize};
 
 use chromoxide::{
-    CapPolicy, GradientMode, HueDomain, ImageCapBuilder, Interval, PaletteProblem, ScalarTarget,
-    SlotDomain, SlotSpec, SolveConfig, StatisticalCapConfig, Term, WeightedSample, WeightedTerm,
-    solve_with_rng,
+    CapPolicy, GradientMode, HueDomain, ImageCapBuilder, Interval, PaletteProblem, SlotDomain,
+    SlotSpec, SolveConfig, StatisticalCapConfig, WeightedSample, decode::decode_slot,
+    objective::ObjectiveEvaluator, solve_with_rng,
 };
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -125,67 +125,148 @@ fn statistical_cap_builder_downweights_single_outliers() {
     assert!(statistical_value < max_value);
 }
 
-#[test]
-fn solver_accepts_statistical_cap_without_prebuilt_image_cap() {
-    let samples = vec![
-        WeightedSample::new(
-            chromoxide::Oklch {
-                l: 0.45,
-                c: 0.05,
-                h: 1.2,
-            }
-            .to_oklab(),
-            1.0,
-            0.5,
-        ),
-        WeightedSample::new(
-            chromoxide::Oklch {
-                l: 0.5,
-                c: 0.055,
-                h: 1.2,
-            }
-            .to_oklab(),
-            1.0,
-            0.5,
-        ),
-    ];
+fn constant_cap(c: f64) -> chromoxide::ImageCap {
+    let samples =
+        vec![
+            WeightedSample::new(chromoxide::Oklch { l: 0.5, c, h: 0.0 }.to_oklab(), 1.0, 0.5,);
+            20
+        ];
+    ImageCapBuilder {
+        n_l: 2,
+        n_h: 4,
+        smooth_l_radius: 0,
+        smooth_h_radius: 0,
+        relax: 1.0,
+    }
+    .build(&samples)
+    .unwrap()
+}
 
-    let problem = PaletteProblem {
+fn soft_penalty_problem(cap: chromoxide::ImageCap) -> PaletteProblem {
+    PaletteProblem {
         slots: vec![SlotSpec {
-            name: "stat".to_string(),
+            name: "soft".to_string(),
             domain: SlotDomain {
                 lightness: Interval { min: 0.3, max: 0.7 },
                 chroma: Interval { min: 0.0, max: 0.2 },
                 hue: HueDomain::Any,
-                cap_policy: CapPolicy::Statistical {
-                    percentile: 0.95,
-                    tolerance_factor: 0.12,
-                    smoothing: 1.0,
-                    use_conditional_hue: true,
-                    penalty_weight: 4.0,
+                cap_policy: CapPolicy::SoftPenalty {
+                    weight: 4.0,
+                    huber_delta: 0.02,
                 },
                 chroma_epsilon: 0.02,
             },
         }],
-        samples,
-        image_cap: None,
-        terms: vec![WeightedTerm {
-            weight: 1.0,
-            name: Some("prefer-bright-chroma".into()),
-            term: Term::ChromaTarget(chromoxide::ChromaTargetTerm {
-                slot: 0,
-                target: ScalarTarget::Target {
-                    value: 0.12,
-                    delta: 0.02,
-                },
-                hinge_delta: None,
-            }),
+        samples: vec![WeightedSample::new(
+            chromoxide::Oklch {
+                l: 0.5,
+                c: 0.06,
+                h: 0.0,
+            }
+            .to_oklab(),
+            1.0,
+            0.5,
+        )],
+        image_cap: Some(cap),
+        terms: vec![],
+        config: SolveConfig::default(),
+    }
+}
+
+#[test]
+fn soft_penalty_uses_prebuilt_image_cap_and_reports_components() {
+    let cap = constant_cap(0.06);
+    let problem = soft_penalty_problem(cap.clone());
+    problem.validate().expect("problem should validate");
+    let evaluator = ObjectiveEvaluator::new(&problem).expect("evaluator should build");
+
+    let inside_latent = vec![0.0, -10.0, 0.0];
+    let (_, inside_breakdown, _) = evaluator
+        .evaluate_breakdown(&inside_latent)
+        .expect("evaluation should succeed");
+    let inside = inside_breakdown
+        .iter()
+        .find(|entry| entry.name == "soft_cap/soft")
+        .expect("soft cap breakdown missing");
+    assert_eq!(inside.raw, 0.0);
+    assert_eq!(inside.components.len(), 2);
+    assert_eq!(inside.components[0], 0.0);
+    assert!((inside.components[1] - 0.06).abs() < 1.0e-9);
+
+    let outside_latent = vec![0.0, 10.0, 0.0];
+    let (_, outside_breakdown, decoded) = evaluator
+        .evaluate_breakdown(&outside_latent)
+        .expect("evaluation should succeed");
+    let outside = outside_breakdown
+        .iter()
+        .find(|entry| entry.name == "soft_cap/soft")
+        .expect("soft cap breakdown missing");
+    assert!(outside.raw > 0.0);
+    assert!(outside.components[0] > 0.0);
+    assert!((outside.components[1] - 0.06).abs() < 1.0e-9);
+    let expected_overflow = (decoded.slots[0].lch.c - 0.06).max(0.0);
+    assert!((outside.components[0] - expected_overflow).abs() < 1.0e-12);
+}
+
+#[test]
+fn hard_intersect_cannot_lower_user_chroma_min() {
+    let cap = constant_cap(0.03);
+    let domain = SlotDomain {
+        lightness: Interval { min: 0.4, max: 0.6 },
+        chroma: Interval {
+            min: 0.08,
+            max: 0.2,
+        },
+        hue: HueDomain::Any,
+        cap_policy: CapPolicy::HardIntersect,
+        chroma_epsilon: 0.02,
+    };
+    let problem = PaletteProblem {
+        slots: vec![SlotSpec {
+            name: "hard-min".to_string(),
+            domain,
         }],
+        samples: vec![WeightedSample::new(
+            chromoxide::Oklch {
+                l: 0.5,
+                c: 0.03,
+                h: 0.0,
+            }
+            .to_oklab(),
+            1.0,
+            0.5,
+        )],
+        image_cap: Some(cap.clone()),
+        terms: vec![],
         config: SolveConfig::default(),
     };
+    let err = problem
+        .validate()
+        .expect_err("must reject infeasible hard cap");
+    let message = err.to_string();
+    assert!(message.contains("hard-min"), "unexpected error: {message}");
+    assert!(message.contains("0.08"));
 
-    let mut rng = StdRng::seed_from_u64(7);
-    let solution = solve_with_rng(&problem, &mut rng).unwrap();
-    assert!(solution.objective.is_finite());
-    assert!(solution.colors_lch[0].c >= 0.0);
+    let decode_err = decode_slot(&domain, 0.0, 0.0, 0.0, Some(&cap))
+        .expect_err("single-slot decode must reject cap below user min");
+    assert!(decode_err.to_string().contains("HardIntersect"));
+}
+
+#[test]
+fn hard_intersect_preserves_user_min_when_feasible() {
+    let cap = constant_cap(0.04);
+    let domain = SlotDomain {
+        lightness: Interval { min: 0.4, max: 0.6 },
+        chroma: Interval {
+            min: 0.01,
+            max: 0.2,
+        },
+        hue: HueDomain::Any,
+        cap_policy: CapPolicy::HardIntersect,
+        chroma_epsilon: 0.02,
+    };
+    let decoded = decode_slot(&domain, 0.0, 8.0, 0.0, Some(&cap)).unwrap();
+    assert!((decoded.effective_chroma_min - 0.01).abs() < 1.0e-12);
+    assert!(decoded.effective_chroma_max <= 0.04 + 1.0e-9);
+    assert!(decoded.effective_chroma_max >= 0.01 - 1.0e-9);
 }

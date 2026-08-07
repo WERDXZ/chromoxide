@@ -45,14 +45,22 @@ mod tests {
         let gates = Box::leak(vec![1.0; labs.len()].into_boxed_slice());
         let lower = Box::leak(vec![0.0; labs.len()].into_boxed_slice());
         let upper = Box::leak(vec![0.2; labs.len()].into_boxed_slice());
+        let user_lower = Box::leak(vec![0.0; labs.len()].into_boxed_slice());
+        let user_upper = Box::leak(vec![0.2; labs.len()].into_boxed_slice());
+        let cap_bounds = Box::leak(vec![None; labs.len()].into_boxed_slice());
         EvalContext {
             slots_lab: labs,
             slots_lch: lchs,
             luminance,
             hue_gates: gates,
-            samples: &[],
             chroma_lower_bounds: lower,
             chroma_upper_bounds: upper,
+            user_chroma_lower_bounds: user_lower,
+            user_chroma_upper_bounds: user_upper,
+            effective_chroma_lower_bounds: lower,
+            effective_chroma_upper_bounds: upper,
+            image_cap_chroma_upper_bounds: cap_bounds,
+            samples: &[],
         }
     }
 

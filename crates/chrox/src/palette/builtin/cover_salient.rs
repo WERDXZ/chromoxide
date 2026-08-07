@@ -2,8 +2,9 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use chromoxide::{
-    CoverTerm, DeltaHTarget, Oklch, PairDeltaHTerm, PairDistanceTerm, RelativeChromaTargetTerm,
-    SaliencyTarget, SaliencyTerm, ScalarTarget, SlotSpec, Term, WeightedTerm,
+    CoverTerm, DeltaHTarget, Oklch, PairDeltaHTerm, PairDistanceTerm, RelativeChromaReference,
+    RelativeChromaTargetTerm, SaliencyTarget, SaliencyTerm, ScalarTarget, SlotSpec, Term,
+    WeightedTerm,
 };
 
 use super::common::unconstrained_slot;
@@ -124,6 +125,7 @@ fn salient_relative_chroma_term(slot: usize, name: &str) -> WeightedTerm {
                 delta: 0.10,
             },
             hinge_delta: None,
+            reference: RelativeChromaReference::ImageCap,
         }),
     }
 }

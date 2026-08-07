@@ -21,10 +21,10 @@ pub mod util;
 pub use assignment::export_samples;
 pub use cap::build_image_cap;
 pub use config::{
-    CapConfig, CapSource, CenterMode, ExportConfig, FarthestPointLabConfig, GlobalContrastConfig,
-    ImagePipelineConfig, KMeansPlusPlusLabConfig, LocalContrastConfig, PreprocessConfig,
-    RandomUniformConfig, ResizeFilter, SaliencyConfig, SaliencyMethod, SamplingConfig,
-    SamplingMethod, StratifiedConfig, UniformGridConfig,
+    CapConfig, CapEstimator, CapSource, CenterMode, ExportConfig, FarthestPointLabConfig,
+    GlobalContrastConfig, ImagePipelineConfig, KMeansPlusPlusLabConfig, LocalContrastConfig,
+    PreprocessConfig, RandomUniformConfig, ResizeFilter, SaliencyConfig, SaliencyMethod,
+    SamplingConfig, SamplingMethod, StratifiedConfig, UniformGridConfig,
 };
 pub use diagnostics::{ImagePipelineDiagnostics, SaliencyStats, saliency_to_luma_image};
 pub use error::ImagePipelineError;

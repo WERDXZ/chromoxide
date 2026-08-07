@@ -3,6 +3,13 @@ use chromoxide::{
     Interval, Monotonicity, ScalarTarget, SlotDomain, SlotSpec, Term, WeightedTerm,
 };
 
+fn image_faithful_cap_policy() -> CapPolicy {
+    CapPolicy::SoftPenalty {
+        weight: 8.0,
+        huber_delta: 0.02,
+    }
+}
+
 pub fn unconstrained_slot(name: &str) -> SlotSpec {
     SlotSpec {
         name: name.into(),
@@ -10,7 +17,7 @@ pub fn unconstrained_slot(name: &str) -> SlotSpec {
             lightness: Interval { min: 0.0, max: 1.0 },
             chroma: Interval { min: 0.0, max: 1.0 },
             hue: HueDomain::Any,
-            cap_policy: CapPolicy::statistical_default(),
+            cap_policy: image_faithful_cap_policy(),
             chroma_epsilon: 0.02,
         },
     }
@@ -26,7 +33,7 @@ pub fn neutral_slot(name: &str, lightness: Interval, chroma_max: f64) -> SlotSpe
                 max: chroma_max,
             },
             hue: HueDomain::Any,
-            cap_policy: CapPolicy::statistical_default(),
+            cap_policy: image_faithful_cap_policy(),
             chroma_epsilon: 0.02,
         },
     }
@@ -48,7 +55,7 @@ pub fn accent_slot(
                 start: deg(start_deg),
                 len: deg(len_deg),
             },
-            cap_policy: CapPolicy::statistical_default(),
+            cap_policy: image_faithful_cap_policy(),
             chroma_epsilon: 0.02,
         },
     }

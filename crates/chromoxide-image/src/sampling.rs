@@ -684,3 +684,60 @@ fn find_nearest_unused_anchor(
         idx => idx,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::prepared::{PreparedImage, PreparedPixel};
+    use crate::sampling::lloyd_refine;
+    use crate::util::lab_distance2;
+
+    fn pixel(lab: chromoxide::Oklab) -> PreparedPixel {
+        PreparedPixel {
+            lab,
+            lin_rgb: [0.0, 0.0, 0.0],
+            luminance: 0.5,
+            alpha: 1.0,
+        }
+    }
+
+    fn cluster_sse(prepared: &PreparedImage, centers: &[chromoxide::Oklab]) -> f64 {
+        let mut total = 0.0;
+        for &idx in &prepared.valid_indices {
+            let px = prepared.pixels[idx];
+            let mut min_d2 = f64::INFINITY;
+            for center in centers {
+                min_d2 = min_d2.min(lab_distance2(px.lab, *center));
+            }
+            total += px.alpha.max(0.0) * min_d2;
+        }
+        total
+    }
+
+    #[test]
+    fn lloyd_refine_never_increases_cluster_sse() {
+        let red = chromoxide::Oklab {
+            l: 0.55,
+            a: 0.18,
+            b: 0.05,
+        };
+        let blue = chromoxide::Oklab {
+            l: 0.45,
+            a: -0.12,
+            b: -0.20,
+        };
+        let prepared = PreparedImage {
+            width: 2,
+            height: 2,
+            pixels: vec![pixel(red), pixel(red), pixel(blue), pixel(blue)],
+            valid_indices: vec![0, 1, 2, 3],
+        };
+        let centers = vec![red, blue];
+        let initial_sse = cluster_sse(&prepared, &centers);
+        let refined = lloyd_refine(&prepared, centers, 20, 1.0e-9).unwrap();
+        let final_sse = cluster_sse(&prepared, &refined);
+        assert!(
+            final_sse <= initial_sse + 1.0e-12,
+            "Lloyd increased SSE: {initial_sse} -> {final_sse}"
+        );
+    }
+}

@@ -3,9 +3,9 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use chromoxide::ImageCapBuilder;
 use chromoxide_image::{
-    CapConfig, CapSource, CenterMode, ExportConfig, FarthestPointLabConfig, ImagePipelineConfig,
-    LocalContrastConfig, PreprocessConfig, ResizeFilter, SaliencyConfig, SaliencyMethod,
-    SamplingConfig, SamplingMethod, prepare_support_from_image_with_rng,
+    CapConfig, CapEstimator, CapSource, CenterMode, ExportConfig, FarthestPointLabConfig,
+    ImagePipelineConfig, LocalContrastConfig, PreprocessConfig, ResizeFilter, SaliencyConfig,
+    SaliencyMethod, SamplingConfig, SamplingMethod, prepare_support_from_image_with_rng,
 };
 use image::{DynamicImage, Rgba, RgbaImage};
 use rand::SeedableRng;
@@ -62,6 +62,7 @@ fn pipeline_end_to_end_returns_samples_cap_and_diagnostics() {
         },
         cap: Some(CapConfig {
             source: CapSource::PreparedPixels,
+            estimator: CapEstimator::MaxObserved,
             builder: ImageCapBuilder::default(),
         }),
     };

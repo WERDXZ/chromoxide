@@ -74,6 +74,11 @@ fn monotonic_penalty_increases_for_crossing_values() {
         hue_gates: &gates,
         chroma_lower_bounds: &[0.0, 0.0, 0.0],
         chroma_upper_bounds: &[1.0, 1.0, 1.0],
+        user_chroma_lower_bounds: &[0.0, 0.0, 0.0],
+        user_chroma_upper_bounds: &[1.0, 1.0, 1.0],
+        effective_chroma_lower_bounds: &[0.0, 0.0, 0.0],
+        effective_chroma_upper_bounds: &[1.0, 1.0, 1.0],
+        image_cap_chroma_upper_bounds: &[None, None, None],
         samples: &[],
     };
 

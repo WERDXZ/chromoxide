@@ -23,7 +23,7 @@ input = "templates/rofi.rasi"
 output = ".config/rofi/colors.rasi"
 
 [image.preprocess]
-max_working_dim = 1600
+max_working_dim = 256
 resize_filter = "Lanczos3"
 background_rgb8 = [255, 255, 255]
 min_alpha = 0.00392156862745098
@@ -45,7 +45,8 @@ min_cluster_weight = 0.0
 
 [image.cap]
 source = "PreparedPixels"
-builder = { bins_l = 18, bins_h = 36, min_per_bin = 8, quantile = 0.98, smooth_passes = 1, hue_wrap = true, bias_curve = "Linear" }
+estimator = { Statistical = { percentile = 0.95, tolerance_factor = 0.12, smoothing = 1.0, use_conditional_hue = true } }
+builder = { n_l = 18, n_h = 36, smooth_l_radius = 1, smooth_h_radius = 2, relax = 1.0 }
 
 [config]
 seed_count = 32

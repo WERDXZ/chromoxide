@@ -120,40 +120,16 @@ pub enum CapPolicy {
     Ignore,
     /// Hard intersection with cap in decode.
     HardIntersect,
-    /// Build a statistical cap from image samples and penalize overflow beyond it.
+    /// Soft penalty when solved chroma exceeds the prebuilt image cap.
     ///
-    /// This replaces the old soft-penalty mode with a more image-faithful cap surface.
-    Statistical {
-        /// Weighted percentile used per `(L, h)` cell.
-        ///
-        /// Typical values are in `(0, 1]`, with `0.95` being a good default.
-        percentile: f64,
-        /// Headroom multiplier applied after percentile estimation.
-        ///
-        /// `0.0` keeps the raw statistical cap; `0.12` allows 12% more chroma.
-        tolerance_factor: f64,
-        /// Smoothing blend in `[0, 1]` between unsmoothed and smoothed cap grids.
-        smoothing: f64,
-        /// Restrict low-mass hue bins at a given lightness before hole filling.
-        use_conditional_hue: bool,
-        /// Penalty weight applied when solved chroma exceeds the tolerant cap.
-        ///
-        /// This preserves the old soft-cap ability to trade off against other terms.
-        penalty_weight: f64,
+    /// The cap surface itself is constructed by `chromoxide-image::CapEstimator`;
+    /// this policy only decides how a slot is penalized against it.
+    SoftPenalty {
+        /// Penalty weight applied to `pseudo_huber(overflow, huber_delta)`.
+        weight: f64,
+        /// Pseudo-Huber delta for overflow penalties.
+        huber_delta: f64,
     },
-}
-
-impl CapPolicy {
-    /// Default statistical cap settings for image-faithful but non-brittle solves.
-    pub fn statistical_default() -> Self {
-        Self::Statistical {
-            percentile: 0.95,
-            tolerance_factor: 0.12,
-            smoothing: 1.0,
-            use_conditional_hue: true,
-            penalty_weight: 1.0,
-        }
-    }
 }
 
 /// Slot-level hard domain constraints.
@@ -211,32 +187,19 @@ impl SlotDomain {
             }
         }
 
-        if let CapPolicy::Statistical {
-            percentile,
-            tolerance_factor,
-            smoothing,
-            use_conditional_hue: _,
-            penalty_weight,
+        if let CapPolicy::SoftPenalty {
+            weight,
+            huber_delta,
         } = self.cap_policy
         {
-            if !percentile.is_finite() || !(0.0..=1.0).contains(&percentile) || percentile <= 0.0 {
+            if !weight.is_finite() || weight < 0.0 {
                 return Err(PaletteError::InvalidDomain(
-                    "statistical cap percentile must be finite and in (0, 1]".to_string(),
+                    "SoftPenalty weight must be finite and >= 0".to_string(),
                 ));
             }
-            if !tolerance_factor.is_finite() || tolerance_factor < 0.0 {
+            if !huber_delta.is_finite() || huber_delta <= 0.0 {
                 return Err(PaletteError::InvalidDomain(
-                    "statistical cap tolerance_factor must be finite and >= 0".to_string(),
-                ));
-            }
-            if !smoothing.is_finite() || !(0.0..=1.0).contains(&smoothing) {
-                return Err(PaletteError::InvalidDomain(
-                    "statistical cap smoothing must be finite and in [0, 1]".to_string(),
-                ));
-            }
-            if !penalty_weight.is_finite() || penalty_weight < 0.0 {
-                return Err(PaletteError::InvalidDomain(
-                    "statistical cap penalty_weight must be finite and >= 0".to_string(),
+                    "SoftPenalty huber_delta must be finite and > 0".to_string(),
                 ));
             }
         }

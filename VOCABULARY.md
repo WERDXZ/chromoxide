@@ -34,11 +34,15 @@ This file defines the main terms used across the workspace.
 - `chroma_epsilon` - low-chroma threshold below which hue-sensitive terms are softened
 - `cap_policy` - how a slot interacts with the image cap
 - `Ignore` - slot ignores the image cap
-- `HardIntersect` - slot chroma is clamped to the cap during decode
-- `Statistical` - slot uses a percentile-based chroma cap built from image samples and pays a penalty only when it exceeds that tolerant cap
+- `HardIntersect` - slot chroma is clamped to `min(user max, cap)` during decode; the user chroma minimum is never lowered
+- `SoftPenalty` - slot decodes with the user chroma interval and pays `weight * pseudo_huber(max(0, C - cap), huber_delta)` when it exceeds the prebuilt cap
+- `CapEstimator` - image-pipeline choice for how a cap surface is constructed from image evidence
+- `MaxObserved` - cap estimator that records the maximum observed chroma per `(L, h)` cell
+- `Statistical` - cap estimator (not a cap policy) that records a percentile-based cap surface
 - `percentile` - weighted per-cell cutoff used when constructing a statistical cap surface
 - `tolerance_factor` - extra headroom applied after percentile estimation so isolated outliers do not dominate the cap
-- `conditional hue` - optional filtering that keeps the statistical cap tied to hue bins that are actually common at a given lightness
+- `conditional hue` - optional statistical-estimator filtering that keeps the cap tied to hue bins that actually carry mass at a given lightness; low-confidence hue cells are gated instead of restored by nearest-fill
+- `cap confidence` - per-cell `cell_mass / row_mass` support, used by conditional-hue gating
 - `neutralish` - a slot/domain with very small allowed chroma, effectively near-neutral
 
 Respecting the original image means solved slot chroma stays inside, or only slightly above, the empirical `c_cap(L, h)` volume supported by the source image rather than borrowing chroma from unrelated lightness or hue regions.
@@ -74,6 +78,7 @@ Respecting the original image means solved slot chroma stays inside, or only sli
 - `weighted sample` - one support color with a weight and saliency score
 - `image cap` / `cap` - image-derived chroma limit used to keep solutions plausible for the source image
 - `relative chroma` - chroma normalized to a slot's effective decode interval: `(C - lo) / (hi - lo)`, used by `RelativeChromaTarget`
+- `relative chroma reference` - the interval a relative chroma ratio is measured against: `UserDomain`, `EffectiveDecodeDomain`, or `ImageCap`
 - `representative anchor` - the real pixel index attached to a representative/cluster; it validates provenance but is not necessarily the assignment center
 - `cluster center` - the Oklab color used for assignment and export (a Lloyd centroid or medoid), which may differ from the anchor pixel's color
 

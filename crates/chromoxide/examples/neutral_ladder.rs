@@ -2,8 +2,8 @@ use std::num::{NonZeroU64, NonZeroUsize};
 
 use chromoxide::{
     CapPolicy, GradientMode, GroupAxis, GroupMember, GroupQuantileTerm, GroupTarget, HueDomain,
-    Interval, Monotonicity, PaletteProblem, SlotDomain, SlotSpec, SolveConfig, Term,
-    WeightedSample, WeightedTerm, solve,
+    ImageCapBuilder, Interval, Monotonicity, PaletteProblem, SlotDomain, SlotSpec, SolveConfig,
+    Term, WeightedSample, WeightedTerm, solve,
 };
 
 fn main() {
@@ -31,15 +31,12 @@ fn main() {
                     max: 0.03,
                 },
                 hue: HueDomain::Any,
-                // Keep one rung on the statistical cap path to show that image-faithful
-                // cap handling still behaves well for a near-neutral ladder.
+                // Keep one rung on the soft cap path to show image-faithful
+                // cap handling for a near-neutral ladder.
                 cap_policy: if i == 0 {
-                    CapPolicy::Statistical {
-                        percentile: 0.95,
-                        tolerance_factor: 0.12,
-                        smoothing: 1.0,
-                        use_conditional_hue: true,
-                        penalty_weight: 1.0,
+                    CapPolicy::SoftPenalty {
+                        weight: 1.0,
+                        huber_delta: 0.02,
                     }
                 } else {
                     CapPolicy::Ignore
@@ -49,10 +46,14 @@ fn main() {
         })
         .collect::<Vec<_>>();
 
+    let image_cap = ImageCapBuilder::default()
+        .build(&samples)
+        .expect("cap build failed");
+
     let problem = PaletteProblem {
         slots,
         samples,
-        image_cap: None,
+        image_cap: Some(image_cap),
         terms: vec![WeightedTerm {
             weight: 10.0,
             name: Some("lightness_ladder".into()),
@@ -80,7 +81,7 @@ fn main() {
     };
 
     let solution = solve(&problem).expect("solve failed");
-    println!("note: n0 uses a statistical cap with 12% tolerance headroom");
+    println!("note: n0 uses a soft cap penalty over a prebuilt image cap");
     println!("objective: {:.6}", solution.objective);
     for (i, c) in solution.colors_lch.iter().enumerate() {
         println!("n{i}: L={:.4} C={:.4}", c.l, c.c);
