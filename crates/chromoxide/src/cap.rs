@@ -128,6 +128,10 @@ pub struct ImageCapDiagnostics {
 pub struct StatisticalCapConfig {
     /// Weighted percentile used per populated `(L, h)` cell.
     pub percentile: f64,
+    /// Weighted chroma percentile across all hues within one lightness row,
+    /// used as the low-confidence fallback profile.
+    #[cfg_attr(feature = "serde", serde(default = "default_global_chroma_percentile"))]
+    pub global_chroma_percentile: f64,
     /// Headroom multiplier applied after percentile estimation.
     pub tolerance_factor: f64,
     /// Blend factor in `[0, 1]` between unsmoothed and smoothed cap grids.
@@ -140,11 +144,16 @@ impl Default for StatisticalCapConfig {
     fn default() -> Self {
         Self {
             percentile: 0.95,
+            global_chroma_percentile: default_global_chroma_percentile(),
             tolerance_factor: 0.12,
             smoothing: 1.0,
             use_conditional_hue: true,
         }
     }
+}
+
+fn default_global_chroma_percentile() -> f64 {
+    0.90
 }
 
 impl StatisticalCapConfig {
@@ -159,6 +168,14 @@ impl StatisticalCapConfig {
         {
             return Err(PaletteError::InvalidProblem(
                 "statistical cap percentile must be finite and in (0, 1]".to_string(),
+            ));
+        }
+        if !self.global_chroma_percentile.is_finite()
+            || !(0.0..=1.0).contains(&self.global_chroma_percentile)
+            || self.global_chroma_percentile <= 0.0
+        {
+            return Err(PaletteError::InvalidProblem(
+                "statistical cap global_chroma_percentile must be finite and in (0, 1]".to_string(),
             ));
         }
         if !self.tolerance_factor.is_finite() || self.tolerance_factor < 0.0 {
@@ -185,6 +202,20 @@ pub struct CapQuery {
     pub confidence: f64,
 }
 
+/// Conditional and global evidence used by an adaptive image-cap query.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AdaptiveCapQuery {
+    /// Chroma from the strict conditional `(L, h)` cap.
+    pub conditional_chroma: f64,
+    /// Chroma from the all-hue profile at the queried lightness.
+    pub global_chroma: f64,
+    /// Original pre-smoothing support confidence for the queried hue.
+    pub support_confidence: f64,
+    /// Confidence-adaptive blend of conditional and global chroma.
+    pub chroma: f64,
+}
+
 /// 2D grid approximation of `c_cap(L, h)`.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
@@ -199,10 +230,16 @@ pub struct ImageCap {
     pub l_max: f64,
     /// Row-major cap values, length `n_l * n_h`.
     pub grid: Vec<f64>,
-    /// Row-major per-cell support confidence, length `n_l * n_h` when populated.
+    /// Per-lightness global chroma profile, length `n_l` when populated.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub global_chroma_by_lightness: Vec<f64>,
+    /// Original pre-smoothing support confidence used for adaptive fallback.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub support_confidence: Vec<f64>,
+    /// Row-major smoothed/blended confidence used for diagnostics.
     ///
-    /// Old serialized caps without this field deserialize as empty, in which
-    /// case queries report confidence `1.0`.
+    /// Old serialized caps without `support_confidence` fall back to this
+    /// field when its length matches the cap grid.
     #[cfg_attr(feature = "serde", serde(default))]
     pub confidence: Vec<f64>,
     diagnostics: ImageCapDiagnostics,
@@ -302,6 +339,54 @@ impl ImageCap {
         }
     }
 
+    /// Returns the all-hue chroma profile interpolated at lightness `l`.
+    ///
+    /// Legacy caps without an explicit profile use the maximum cap in each
+    /// neighboring lightness row before interpolation.
+    pub fn query_global_chroma(&self, l: f64) -> f64 {
+        if self.n_l == 0 {
+            return 0.0;
+        }
+
+        let profile = if self.global_chroma_by_lightness.len() == self.n_l {
+            self.global_chroma_by_lightness
+                .iter()
+                .map(|&value| finite_nonnegative(value))
+                .collect::<Vec<_>>()
+        } else {
+            (0..self.n_l)
+                .map(|li| {
+                    (0..self.n_h)
+                        .filter_map(|hi| self.grid.get(li * self.n_h + hi).copied())
+                        .map(finite_nonnegative)
+                        .fold(0.0_f64, f64::max)
+                })
+                .collect::<Vec<_>>()
+        };
+
+        interpolate_lightness_profile(&profile, l, self.l_min, self.l_max)
+    }
+
+    /// Returns a confidence-adaptive blend of conditional and global cap evidence.
+    pub fn query_adaptive_with(
+        &self,
+        l: f64,
+        h: f64,
+        interpolation: CapInterpolation,
+    ) -> AdaptiveCapQuery {
+        let local = self.query_with_confidence(l, h, interpolation);
+        let global = self.query_global_chroma(l);
+        let gate = smoothstep01(local.confidence / StatisticalCapConfig::CONDITIONAL_HUE_THRESHOLD);
+        let adaptive = gate * local.chroma + (1.0 - gate) * global;
+
+        AdaptiveCapQuery {
+            conditional_chroma: local.chroma,
+            global_chroma: global,
+            support_confidence: local.confidence,
+            chroma: adaptive.max(0.0),
+        }
+    }
+
     /// Conservative minimum cap over a slot's full `(L, h)` domain.
     ///
     /// Samples the domain boundaries plus every cap grid coordinate that falls
@@ -372,7 +457,9 @@ impl ImageCap {
     }
 
     fn confidence_at(&self, l: usize, h: usize) -> f64 {
-        if self.confidence.len() == self.grid.len() {
+        if self.support_confidence.len() == self.grid.len() {
+            self.support_confidence[self.idx(l, h)].clamp(0.0, 1.0)
+        } else if self.confidence.len() == self.grid.len() {
             self.confidence[self.idx(l, h)].clamp(0.0, 1.0)
         } else {
             1.0
@@ -462,6 +549,7 @@ impl ImageCapBuilder {
 
         let cell_count = self.n_l * self.n_h;
         let mut cells = vec![Vec::<(f64, f64)>::new(); cell_count];
+        let mut row_samples = vec![Vec::<(f64, f64)>::new(); self.n_l];
         let mut hue_mass = vec![0.0; cell_count];
         let mut row_mass = vec![0.0; self.n_l];
 
@@ -473,6 +561,7 @@ impl ImageCapBuilder {
             let idx = li * self.n_h + hi;
             let weight = weight.max(0.0);
             cells[idx].push((lch.c.max(0.0), weight));
+            row_samples[li].push((lch.c.max(0.0), weight));
             hue_mass[idx] += weight;
             row_mass[li] += weight;
         }
@@ -501,11 +590,23 @@ impl ImageCapBuilder {
             }
         }
 
+        let global_raw = row_samples
+            .iter_mut()
+            .map(|samples| {
+                if samples.is_empty() {
+                    f64::NAN
+                } else {
+                    weighted_percentile(samples, config.global_chroma_percentile)
+                }
+            })
+            .collect::<Vec<_>>();
+
         if config.use_conditional_hue {
-            Ok(self.finish_conditional_grid(grid, confidence, config, l_min, l_max))
+            Ok(self.finish_conditional_grid(grid, confidence, global_raw, config, l_min, l_max))
         } else {
             Ok(self.finish_grid_with_confidence(
                 grid,
+                global_raw,
                 config.tolerance_factor,
                 config.smoothing,
                 l_min,
@@ -527,6 +628,7 @@ impl ImageCapBuilder {
         let (l_min, l_max) = lightness_bounds(&make_iter)?;
 
         let mut grid = vec![f64::NAN; self.n_l * self.n_h];
+        let mut global_raw = vec![f64::NAN; self.n_l];
         let l_span = (l_max - l_min).max(EPS);
 
         for lab in make_iter() {
@@ -539,9 +641,12 @@ impl ImageCapBuilder {
             if grid[idx].is_nan() || c > grid[idx] {
                 grid[idx] = c;
             }
+            if global_raw[li].is_nan() || c > global_raw[li] {
+                global_raw[li] = c;
+            }
         }
 
-        Ok(self.finish_grid_with_confidence(grid, self.relax - 1.0, 1.0, l_min, l_max))
+        Ok(self.finish_grid_with_confidence(grid, global_raw, self.relax - 1.0, 1.0, l_min, l_max))
     }
 
     fn validate_builder(&self) -> Result<(), PaletteError> {
@@ -561,6 +666,7 @@ impl ImageCapBuilder {
     fn finish_grid_with_confidence(
         &self,
         mut grid: Vec<f64>,
+        global_raw: Vec<f64>,
         tolerance_factor: f64,
         smoothing: f64,
         l_min: f64,
@@ -598,6 +704,7 @@ impl ImageCapBuilder {
             *v = (*v * scale).max(0.0);
         }
         let (mean_after_smooth, max_after_smooth) = stats(&smoothed);
+        let global_chroma_by_lightness = self.finish_global_profile(global_raw, smoothing, scale);
 
         ImageCap {
             n_l: self.n_l,
@@ -605,6 +712,8 @@ impl ImageCapBuilder {
             l_min,
             l_max,
             grid: smoothed,
+            global_chroma_by_lightness,
+            support_confidence: vec![1.0; self.n_l * self.n_h],
             confidence: vec![1.0; self.n_l * self.n_h],
             diagnostics: ImageCapDiagnostics {
                 empty_cells,
@@ -620,6 +729,7 @@ impl ImageCapBuilder {
         &self,
         mut grid: Vec<f64>,
         mut confidence: Vec<f64>,
+        global_raw: Vec<f64>,
         config: StatisticalCapConfig,
         l_min: f64,
         l_max: f64,
@@ -684,6 +794,8 @@ impl ImageCapBuilder {
             *v = (*v * scale).max(0.0);
         }
         let (mean_after_smooth, max_after_smooth) = stats(&grid);
+        let global_chroma_by_lightness =
+            self.finish_global_profile(global_raw, config.smoothing, scale);
 
         ImageCap {
             n_l: self.n_l,
@@ -691,6 +803,8 @@ impl ImageCapBuilder {
             l_min,
             l_max,
             grid,
+            global_chroma_by_lightness,
+            support_confidence: gate_confidence,
             confidence,
             diagnostics: ImageCapDiagnostics {
                 empty_cells,
@@ -700,6 +814,24 @@ impl ImageCapBuilder {
                 max_after_smooth,
             },
         }
+    }
+
+    fn finish_global_profile(&self, mut profile: Vec<f64>, smoothing: f64, scale: f64) -> Vec<f64> {
+        lightness_nearest_fill_profile(&mut profile);
+        for value in &mut profile {
+            *value = finite_nonnegative(*value);
+        }
+
+        let smoothed = if self.smooth_l_radius > 0 {
+            smooth_l_profile(&profile, self.smooth_l_radius)
+        } else {
+            profile.clone()
+        };
+        let blend = smoothing.clamp(0.0, 1.0);
+        for (base, smoothed) in profile.iter_mut().zip(smoothed) {
+            *base = finite_nonnegative((*base * (1.0 - blend) + smoothed * blend) * scale);
+        }
+        profile
     }
 }
 
@@ -777,6 +909,76 @@ fn weighted_percentile(samples: &mut [(f64, f64)], percentile: f64) -> f64 {
         }
     }
     samples.last().map_or(0.0, |(value, _)| *value)
+}
+
+fn finite_nonnegative(value: f64) -> f64 {
+    if value.is_finite() {
+        value.max(0.0)
+    } else {
+        0.0
+    }
+}
+
+fn interpolate_lightness_profile(profile: &[f64], l: f64, l_min: f64, l_max: f64) -> f64 {
+    if profile.is_empty() {
+        return 0.0;
+    }
+    if profile.len() == 1 {
+        return finite_nonnegative(profile[0]);
+    }
+
+    let l_span = (l_max - l_min).max(EPS);
+    let l_norm = ((l - l_min) / l_span).clamp(0.0, 1.0);
+    let lf = l_norm * (profile.len() - 1) as f64;
+    let l0 = lf.floor() as usize;
+    let l1 = (l0 + 1).min(profile.len() - 1);
+    let t = lf - l0 as f64;
+    finite_nonnegative(
+        finite_nonnegative(profile[l0]) * (1.0 - t) + finite_nonnegative(profile[l1]) * t,
+    )
+}
+
+fn lightness_nearest_fill_profile(profile: &mut [f64]) {
+    let valid_indices = profile
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| value.is_finite().then_some(index))
+        .collect::<Vec<_>>();
+    if valid_indices.is_empty() {
+        profile.fill(0.0);
+        return;
+    }
+
+    for index in 0..profile.len() {
+        if profile[index].is_finite() {
+            continue;
+        }
+        let mut nearest = valid_indices[0];
+        let mut nearest_distance = nearest.abs_diff(index);
+        for &candidate in &valid_indices[1..] {
+            let distance = candidate.abs_diff(index);
+            if distance < nearest_distance {
+                nearest = candidate;
+                nearest_distance = distance;
+            }
+        }
+        profile[index] = profile[nearest];
+    }
+}
+
+fn smooth_l_profile(profile: &[f64], radius: usize) -> Vec<f64> {
+    let mut smoothed = vec![0.0; profile.len()];
+    let width = 2 * radius + 1;
+    for (index, value) in smoothed.iter_mut().enumerate() {
+        let mut sum = 0.0;
+        for offset in 0..width {
+            let delta = offset as isize - radius as isize;
+            let neighbor = (index as isize + delta).clamp(0, profile.len() as isize - 1) as usize;
+            sum += profile[neighbor];
+        }
+        *value = sum / width as f64;
+    }
+    smoothed
 }
 
 /// Returns `(mean, max)` summary for a cap grid.
@@ -986,8 +1188,72 @@ fn smooth_l_conf_weighted(
 mod tests {
     use std::f64::consts::TAU;
 
-    use crate::cap::{CapInterpolation, ImageCapBuilder, StatisticalCapConfig};
+    use crate::cap::{
+        CapInterpolation, ImageCap, ImageCapBuilder, ImageCapDiagnostics, StatisticalCapConfig,
+    };
     use crate::color::Oklch;
+
+    fn statistical_profile(pixels: &[(crate::color::Oklab, f64)], percentile: f64) -> ImageCap {
+        ImageCapBuilder {
+            n_l: 2,
+            n_h: 8,
+            smooth_l_radius: 0,
+            smooth_h_radius: 0,
+            relax: 1.0,
+        }
+        .build_statistical_from_weighted_oklab(
+            || pixels.iter().copied(),
+            StatisticalCapConfig {
+                percentile: 1.0,
+                global_chroma_percentile: percentile,
+                tolerance_factor: 0.0,
+                smoothing: 0.0,
+                use_conditional_hue: false,
+            },
+        )
+        .unwrap()
+    }
+
+    fn direct_cap(
+        conditional_chroma: f64,
+        global_chroma: f64,
+        support_confidence: f64,
+    ) -> ImageCap {
+        ImageCap {
+            n_l: 2,
+            n_h: 2,
+            l_min: 0.0,
+            l_max: 1.0,
+            grid: vec![conditional_chroma; 4],
+            global_chroma_by_lightness: vec![global_chroma; 2],
+            support_confidence: vec![support_confidence; 4],
+            confidence: vec![0.75; 4],
+            diagnostics: ImageCapDiagnostics::default(),
+        }
+    }
+
+    #[test]
+    fn global_chroma_percentile_validation_enforces_finite_open_closed_range() {
+        let mut config = StatisticalCapConfig {
+            percentile: 0.95,
+            global_chroma_percentile: 0.90,
+            tolerance_factor: 0.12,
+            smoothing: 1.0,
+            use_conditional_hue: true,
+        };
+
+        for invalid in [f64::NAN, f64::NEG_INFINITY, 0.0, -0.1, 1.01] {
+            config.global_chroma_percentile = invalid;
+            assert!(
+                config.validate().is_err(),
+                "accepted invalid value {invalid}"
+            );
+        }
+        for valid in [f64::MIN_POSITIVE, 0.90, 1.0] {
+            config.global_chroma_percentile = valid;
+            assert!(config.validate().is_ok(), "rejected valid value {valid}");
+        }
+    }
 
     fn supported_two_hue_cap(smoothing: f64) -> crate::cap::ImageCap {
         let mut pixels = Vec::new();
@@ -1022,6 +1288,7 @@ mod tests {
             || pixels.iter().copied(),
             StatisticalCapConfig {
                 percentile: 1.0,
+                global_chroma_percentile: 0.90,
                 tolerance_factor: 0.0,
                 smoothing,
                 use_conditional_hue: true,
@@ -1051,5 +1318,374 @@ mod tests {
         assert!(smooth_a > base_a);
         assert!(smooth_b < base_b);
         assert!((smooth_b - smooth_a).abs() < (base_b - base_a).abs());
+    }
+
+    #[test]
+    fn global_profile_uses_weighted_row_percentile() {
+        let pixels = [
+            (
+                Oklch {
+                    l: 0.4,
+                    c: 0.03,
+                    h: 0.0,
+                }
+                .to_oklab(),
+                9.0,
+            ),
+            (
+                Oklch {
+                    l: 0.4,
+                    c: 0.18,
+                    h: 1.0,
+                }
+                .to_oklab(),
+                1.0,
+            ),
+            (
+                Oklch {
+                    l: 0.6,
+                    c: 0.10,
+                    h: 0.0,
+                }
+                .to_oklab(),
+                1.0,
+            ),
+            (
+                Oklch {
+                    l: 0.6,
+                    c: 0.20,
+                    h: 1.0,
+                }
+                .to_oklab(),
+                9.0,
+            ),
+        ];
+
+        let cap = statistical_profile(&pixels, 0.90);
+
+        assert_eq!(cap.global_chroma_by_lightness.len(), 2);
+        assert!((cap.global_chroma_by_lightness[0] - 0.03).abs() < 1.0e-9);
+        assert!((cap.global_chroma_by_lightness[1] - 0.20).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn global_profile_is_low_for_muted_image() {
+        let pixels = vec![
+            (
+                Oklch {
+                    l: 0.4,
+                    c: 0.03,
+                    h: 0.0,
+                }
+                .to_oklab(),
+                1.0,
+            ),
+            (
+                Oklch {
+                    l: 0.4,
+                    c: 0.05,
+                    h: 1.0,
+                }
+                .to_oklab(),
+                1.0,
+            ),
+            (
+                Oklch {
+                    l: 0.6,
+                    c: 0.04,
+                    h: 0.0,
+                }
+                .to_oklab(),
+                1.0,
+            ),
+            (
+                Oklch {
+                    l: 0.6,
+                    c: 0.05,
+                    h: 1.0,
+                }
+                .to_oklab(),
+                1.0,
+            ),
+        ];
+
+        let cap = statistical_profile(&pixels, 0.90);
+
+        assert!(
+            cap.global_chroma_by_lightness
+                .iter()
+                .all(|&c| { (0.049..=0.051).contains(&c) })
+        );
+    }
+
+    #[test]
+    fn global_profile_is_high_for_vivid_image() {
+        let muted = vec![
+            (
+                Oklch {
+                    l: 0.4,
+                    c: 0.03,
+                    h: 0.0,
+                }
+                .to_oklab(),
+                1.0,
+            ),
+            (
+                Oklch {
+                    l: 0.4,
+                    c: 0.05,
+                    h: 1.0,
+                }
+                .to_oklab(),
+                1.0,
+            ),
+            (
+                Oklch {
+                    l: 0.6,
+                    c: 0.04,
+                    h: 0.0,
+                }
+                .to_oklab(),
+                1.0,
+            ),
+            (
+                Oklch {
+                    l: 0.6,
+                    c: 0.05,
+                    h: 1.0,
+                }
+                .to_oklab(),
+                1.0,
+            ),
+        ];
+        let vivid = vec![
+            (
+                Oklch {
+                    l: 0.4,
+                    c: 0.14,
+                    h: 0.0,
+                }
+                .to_oklab(),
+                1.0,
+            ),
+            (
+                Oklch {
+                    l: 0.4,
+                    c: 0.18,
+                    h: 1.0,
+                }
+                .to_oklab(),
+                1.0,
+            ),
+            (
+                Oklch {
+                    l: 0.6,
+                    c: 0.15,
+                    h: 0.0,
+                }
+                .to_oklab(),
+                1.0,
+            ),
+            (
+                Oklch {
+                    l: 0.6,
+                    c: 0.18,
+                    h: 1.0,
+                }
+                .to_oklab(),
+                1.0,
+            ),
+        ];
+        let muted_cap = statistical_profile(&muted, 0.90);
+        let vivid_cap = statistical_profile(&vivid, 0.90);
+
+        for (&muted_chroma, &vivid_chroma) in muted_cap
+            .global_chroma_by_lightness
+            .iter()
+            .zip(&vivid_cap.global_chroma_by_lightness)
+        {
+            assert!((0.179..=0.181).contains(&vivid_chroma));
+            assert!(vivid_chroma > muted_chroma + 0.08);
+        }
+    }
+
+    #[test]
+    fn max_observed_global_profile_uses_row_max_and_relax() {
+        let pixels = [
+            Oklch {
+                l: 0.4,
+                c: 0.03,
+                h: 0.0,
+            }
+            .to_oklab(),
+            Oklch {
+                l: 0.4,
+                c: 0.12,
+                h: 1.0,
+            }
+            .to_oklab(),
+            Oklch {
+                l: 0.6,
+                c: 0.08,
+                h: 0.0,
+            }
+            .to_oklab(),
+            Oklch {
+                l: 0.6,
+                c: 0.20,
+                h: 1.0,
+            }
+            .to_oklab(),
+        ];
+        let cap = ImageCapBuilder {
+            n_l: 2,
+            n_h: 8,
+            smooth_l_radius: 0,
+            smooth_h_radius: 0,
+            relax: 1.25,
+        }
+        .build_from_oklab(|| pixels.iter().copied())
+        .unwrap();
+
+        assert_eq!(cap.global_chroma_by_lightness.len(), 2);
+        assert!((cap.global_chroma_by_lightness[0] - 0.15).abs() < 1.0e-9);
+        assert!((cap.global_chroma_by_lightness[1] - 0.25).abs() < 1.0e-9);
+        assert!(
+            cap.support_confidence
+                .iter()
+                .all(|&confidence| confidence == 1.0)
+        );
+    }
+
+    #[test]
+    fn adaptive_cap_equals_conditional_for_supported_hue() {
+        let cap = direct_cap(0.05, 0.18, 1.0);
+
+        let query = cap.query_adaptive_with(0.5, 0.0, CapInterpolation::Nearest);
+
+        assert_eq!(query.conditional_chroma, 0.05);
+        assert_eq!(query.global_chroma, 0.18);
+        assert_eq!(query.support_confidence, 1.0);
+        assert_eq!(query.chroma, 0.05);
+    }
+
+    #[test]
+    fn adaptive_cap_equals_global_for_unsupported_hue() {
+        let cap = direct_cap(0.0, 0.18, 0.0);
+
+        let query = cap.query_adaptive_with(0.5, 0.0, CapInterpolation::Nearest);
+
+        assert_eq!(query.conditional_chroma, 0.0);
+        assert_eq!(query.global_chroma, 0.18);
+        assert_eq!(query.support_confidence, 0.0);
+        assert_eq!(query.chroma, 0.18);
+    }
+
+    #[test]
+    fn adaptive_cap_smoothly_blends_low_confidence_hue() {
+        let cap = direct_cap(
+            0.04,
+            0.16,
+            StatisticalCapConfig::CONDITIONAL_HUE_THRESHOLD / 2.0,
+        );
+
+        let query = cap.query_adaptive_with(0.5, 0.0, CapInterpolation::Nearest);
+
+        assert_eq!(query.conditional_chroma, 0.04);
+        assert_eq!(query.global_chroma, 0.16);
+        assert_eq!(query.support_confidence, 0.01);
+        assert!((query.chroma - 0.10).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn support_confidence_is_pre_smoothing() {
+        let pixels = [
+            (
+                Oklch {
+                    l: 0.4,
+                    c: 0.20,
+                    h: 0.0,
+                }
+                .to_oklab(),
+                1.0,
+            ),
+            (
+                Oklch {
+                    l: 0.6,
+                    c: 0.20,
+                    h: 0.0,
+                }
+                .to_oklab(),
+                1.0,
+            ),
+        ];
+        let cap = ImageCapBuilder {
+            n_l: 2,
+            n_h: 16,
+            smooth_l_radius: 0,
+            smooth_h_radius: 1,
+            relax: 1.0,
+        }
+        .build_statistical_from_weighted_oklab(
+            || pixels.iter().copied(),
+            StatisticalCapConfig {
+                percentile: 1.0,
+                global_chroma_percentile: 0.90,
+                tolerance_factor: 0.0,
+                smoothing: 1.0,
+                use_conditional_hue: true,
+            },
+        )
+        .unwrap();
+        let neighbor = 1;
+
+        assert_eq!(cap.support_confidence[neighbor], 0.0);
+        assert!(cap.confidence[neighbor] > 0.0);
+        let query = cap.query_with_confidence(cap.l_min, TAU / 16.0, CapInterpolation::Nearest);
+        assert_eq!(query.confidence, 0.0);
+    }
+
+    #[test]
+    fn old_cap_without_global_profile_has_finite_fallback() {
+        let cap = ImageCap {
+            n_l: 2,
+            n_h: 2,
+            l_min: 0.0,
+            l_max: 1.0,
+            grid: vec![0.04, 0.08, 0.12, 0.16],
+            global_chroma_by_lightness: Vec::new(),
+            support_confidence: Vec::new(),
+            confidence: vec![0.0; 4],
+            diagnostics: ImageCapDiagnostics::default(),
+        };
+
+        let global = cap.query_global_chroma(0.5);
+        let adaptive = cap.query_adaptive_with(0.5, 0.0, CapInterpolation::Bilinear);
+
+        assert!(global.is_finite());
+        assert!((global - 0.12).abs() < 1.0e-12);
+        assert_eq!(adaptive.support_confidence, 0.0);
+        assert!((adaptive.chroma - 0.12).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn old_cap_without_any_confidence_defaults_to_full_support() {
+        let cap = ImageCap {
+            n_l: 2,
+            n_h: 2,
+            l_min: 0.0,
+            l_max: 1.0,
+            grid: vec![0.08; 4],
+            global_chroma_by_lightness: Vec::new(),
+            support_confidence: Vec::new(),
+            confidence: Vec::new(),
+            diagnostics: ImageCapDiagnostics::default(),
+        };
+
+        let query = cap.query_adaptive_with(0.5, 0.0, CapInterpolation::Nearest);
+
+        assert_eq!(query.support_confidence, 1.0);
+        assert_eq!(query.conditional_chroma, 0.08);
+        assert_eq!(query.chroma, 0.08);
     }
 }

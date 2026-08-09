@@ -161,6 +161,11 @@ mod tests {
         assert_eq!(first_cap.l_min, second_cap.l_min);
         assert_eq!(first_cap.l_max, second_cap.l_max);
         assert_eq!(first_cap.grid, second_cap.grid);
+        assert_eq!(
+            first_cap.global_chroma_by_lightness,
+            second_cap.global_chroma_by_lightness
+        );
+        assert_eq!(first_cap.support_confidence, second_cap.support_confidence);
         assert_eq!(first_cap.confidence, second_cap.confidence);
 
         assert_eq!(

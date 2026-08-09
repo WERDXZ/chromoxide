@@ -86,7 +86,7 @@ impl<'a> ObjectiveEvaluator<'a> {
     /// Evaluates objective and returns breakdown with decoded palette.
     ///
     /// This includes explicit weighted term contributions and soft-cap
-    /// penalties for `CapPolicy::SoftPenalty` slots.
+    /// penalties for strict and adaptive soft-cap slots.
     pub fn evaluate_breakdown(
         &self,
         latent: &[f64],
@@ -128,6 +128,16 @@ impl<'a> ObjectiveEvaluator<'a> {
                 })
             })
             .collect();
+        let adaptive_image_cap_chroma_upper_bounds: Vec<Option<f64>> = decoded
+            .slots
+            .iter()
+            .map(|s| {
+                self.problem.image_cap.as_ref().map(|cap| {
+                    cap.query_adaptive_with(s.lch.l, s.lch.h, self.problem.config.cap_interpolation)
+                        .chroma
+                })
+            })
+            .collect();
         let ctx = EvalContext {
             slots_lab: &labs,
             slots_lch: &lchs,
@@ -140,6 +150,7 @@ impl<'a> ObjectiveEvaluator<'a> {
             effective_chroma_lower_bounds: &effective_chroma_lower_bounds,
             effective_chroma_upper_bounds: &effective_chroma_upper_bounds,
             image_cap_chroma_upper_bounds: &image_cap_chroma_upper_bounds,
+            adaptive_image_cap_chroma_upper_bounds: &adaptive_image_cap_chroma_upper_bounds,
             samples: &self.problem.samples,
         };
 
@@ -167,40 +178,83 @@ impl<'a> ObjectiveEvaluator<'a> {
         }
 
         for (i, slot_spec) in self.problem.slots.iter().enumerate() {
-            if let CapPolicy::SoftPenalty {
-                weight,
-                huber_delta,
-            } = slot_spec.domain.cap_policy
-            {
-                let cap = self
-                    .problem
-                    .image_cap
-                    .as_ref()
-                    .ok_or_else(|| {
-                        PaletteError::InvalidProblem(
-                            "SoftPenalty requires problem.image_cap to be present".to_string(),
-                        )
-                    })?
-                    .query_with(
-                        decoded.slots[i].lch.l,
-                        decoded.slots[i].lch.h,
-                        self.problem.config.cap_interpolation,
-                    );
-                let overflow = relu(decoded.slots[i].lch.c - cap);
-                let raw = pseudo_huber(overflow, huber_delta);
-                let weighted = raw * weight;
-                if !weighted.is_finite() {
-                    return Err(PaletteError::NumericInstability(
-                        "non-finite soft cap value".to_string(),
-                    ));
+            match slot_spec.domain.cap_policy {
+                CapPolicy::SoftPenalty {
+                    weight,
+                    huber_delta,
+                } => {
+                    let cap = self
+                        .problem
+                        .image_cap
+                        .as_ref()
+                        .ok_or_else(|| {
+                            PaletteError::InvalidProblem(
+                                "SoftPenalty requires problem.image_cap to be present".to_string(),
+                            )
+                        })?
+                        .query_with(
+                            decoded.slots[i].lch.l,
+                            decoded.slots[i].lch.h,
+                            self.problem.config.cap_interpolation,
+                        );
+                    let overflow = relu(decoded.slots[i].lch.c - cap);
+                    let raw = pseudo_huber(overflow, huber_delta);
+                    let weighted = raw * weight;
+                    if !weighted.is_finite() {
+                        return Err(PaletteError::NumericInstability(
+                            "non-finite soft cap value".to_string(),
+                        ));
+                    }
+                    total += weighted;
+                    breakdown.push(TermBreakdown {
+                        name: format!("soft_cap/{}", slot_spec.name),
+                        raw,
+                        weighted,
+                        components: vec![overflow, cap],
+                    });
                 }
-                total += weighted;
-                breakdown.push(TermBreakdown {
-                    name: format!("soft_cap/{}", slot_spec.name),
-                    raw,
-                    weighted,
-                    components: vec![overflow, cap],
-                });
+                CapPolicy::AdaptiveSoftPenalty {
+                    weight,
+                    huber_delta,
+                } => {
+                    let query = self
+                        .problem
+                        .image_cap
+                        .as_ref()
+                        .ok_or_else(|| {
+                            PaletteError::InvalidProblem(
+                                "AdaptiveSoftPenalty requires problem.image_cap to be present"
+                                    .to_string(),
+                            )
+                        })?
+                        .query_adaptive_with(
+                            decoded.slots[i].lch.l,
+                            decoded.slots[i].lch.h,
+                            self.problem.config.cap_interpolation,
+                        );
+                    let overflow = relu(decoded.slots[i].lch.c - query.chroma);
+                    let raw = pseudo_huber(overflow, huber_delta);
+                    let weighted = raw * weight;
+                    if !weighted.is_finite() {
+                        return Err(PaletteError::NumericInstability(
+                            "non-finite adaptive soft cap value".to_string(),
+                        ));
+                    }
+                    total += weighted;
+                    breakdown.push(TermBreakdown {
+                        name: format!("adaptive_soft_cap/{}", slot_spec.name),
+                        raw,
+                        weighted,
+                        components: vec![
+                            overflow,
+                            query.chroma,
+                            query.conditional_chroma,
+                            query.global_chroma,
+                            query.support_confidence,
+                        ],
+                    });
+                }
+                CapPolicy::Ignore | CapPolicy::HardIntersect => {}
             }
         }
 

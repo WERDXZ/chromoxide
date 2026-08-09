@@ -39,6 +39,19 @@ from every prepared valid pixel (alpha-weighted), not from the exported k-means
 samples. `MaxObserved` is also available for the classic maximum-chroma surface.
 With `use_conditional_hue`, low-support hue cells are gated by confidence after
 confidence-weighted smoothing instead of being restored by nearest-fill.
+The cap also stores a global chroma profile computed directly from all weighted
+hues in each lightness row. Original pre-smoothing `support_confidence` controls
+the adaptive query; the separately stored `confidence` grid is diagnostic.
+
+The resulting cap views are deliberately distinct:
+
+- conditional cap: strict `(L, h)` evidence
+- global profile: source-wide chroma style at the queried lightness
+- adaptive cap: conditional for supported hues, global for unsupported hues,
+  with a smooth confidence blend between them
+
+Muted input therefore produces a muted global profile, while vivid input can
+support more vivid semantic colors without inventing hue-local evidence.
 
 ## Quick start
 

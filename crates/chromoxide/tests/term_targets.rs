@@ -41,6 +41,7 @@ fn make_ctx(slots_lch: &[Oklch], hue_gates: &[f64]) -> EvalContext<'static> {
         effective_chroma_lower_bounds: lower,
         effective_chroma_upper_bounds: upper,
         image_cap_chroma_upper_bounds: cap_bounds,
+        adaptive_image_cap_chroma_upper_bounds: cap_bounds,
         samples: &[],
     }
 }

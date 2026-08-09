@@ -135,12 +135,14 @@ impl PaletteProblem {
         let uses_cap = self.slots.iter().any(|slot| {
             matches!(
                 slot.domain.cap_policy,
-                CapPolicy::HardIntersect | CapPolicy::SoftPenalty { .. }
+                CapPolicy::HardIntersect
+                    | CapPolicy::SoftPenalty { .. }
+                    | CapPolicy::AdaptiveSoftPenalty { .. }
             )
         });
         if uses_cap && self.image_cap.is_none() {
             return Err(PaletteError::InvalidProblem(
-                "HardIntersect or SoftPenalty slots require problem.image_cap to be present"
+                "HardIntersect, SoftPenalty, or AdaptiveSoftPenalty slots require problem.image_cap to be present"
                     .to_string(),
             ));
         }
@@ -285,11 +287,23 @@ fn validate_term(term: &Term, n_slots: usize, has_image_cap: bool) -> Result<(),
             validate_slot_index(t.slot, n_slots, "RelativeChromaTargetTerm.slot")?;
             validate_relative_chroma_target(&t.target)?;
             validate_hinge_delta(t.hinge_delta, "RelativeChromaTargetTerm.hinge_delta")?;
-            if t.reference == RelativeChromaReference::ImageCap && !has_image_cap {
-                return Err(PaletteError::InvalidProblem(
-                    "RelativeChromaTargetTerm with RelativeChromaReference::ImageCap requires problem.image_cap"
-                        .to_string(),
-                ));
+            if !has_image_cap {
+                match t.reference {
+                    RelativeChromaReference::ImageCap => {
+                        return Err(PaletteError::InvalidProblem(
+                            "RelativeChromaTargetTerm with RelativeChromaReference::ImageCap requires problem.image_cap"
+                                .to_string(),
+                        ));
+                    }
+                    RelativeChromaReference::AdaptiveImageCap => {
+                        return Err(PaletteError::InvalidProblem(
+                            "RelativeChromaTargetTerm with RelativeChromaReference::AdaptiveImageCap requires problem.image_cap"
+                                .to_string(),
+                        ));
+                    }
+                    RelativeChromaReference::UserDomain
+                    | RelativeChromaReference::EffectiveDecodeDomain => {}
+                }
             }
         }
         Term::HueTarget(t) => {

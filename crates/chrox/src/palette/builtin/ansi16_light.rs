@@ -16,7 +16,7 @@ pub fn ansi_16_light() -> Box<dyn Palette> {
         "ANSI 16 Light",
         slots(),
         terms(),
-        Some(priors::ansi16_terms),
+        Some(priors::ansi16_light_terms),
         PartialSolveConfig {
             seed_count: Some(28),
             keep_top_k: Some(8),

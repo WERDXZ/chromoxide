@@ -35,6 +35,7 @@ fn contrast_term_behaves_as_expected() {
         effective_chroma_lower_bounds: &[0.0, 0.0],
         effective_chroma_upper_bounds: &[1.0, 1.0],
         image_cap_chroma_upper_bounds: &[None, None],
+        adaptive_image_cap_chroma_upper_bounds: &[None, None],
         samples: &[],
     };
 
@@ -76,6 +77,7 @@ fn contrast_term_behaves_as_expected() {
         effective_chroma_lower_bounds: &[0.0, 0.0],
         effective_chroma_upper_bounds: &[1.0, 1.0],
         image_cap_chroma_upper_bounds: &[None, None],
+        adaptive_image_cap_chroma_upper_bounds: &[None, None],
         samples: &[],
     };
     let gray_loss = eval_contrast(&term, &gray_ctx).raw;
@@ -121,6 +123,7 @@ fn hue_gate_suppresses_delta_h_at_low_chroma() {
         effective_chroma_lower_bounds: &[0.0, 0.0],
         effective_chroma_upper_bounds: &[1.0, 1.0],
         image_cap_chroma_upper_bounds: &[None, None],
+        adaptive_image_cap_chroma_upper_bounds: &[None, None],
         samples: &[],
     };
     let gated_ctx = EvalContext {
@@ -135,6 +138,7 @@ fn hue_gate_suppresses_delta_h_at_low_chroma() {
         effective_chroma_lower_bounds: &[0.0, 0.0],
         effective_chroma_upper_bounds: &[1.0, 1.0],
         image_cap_chroma_upper_bounds: &[None, None],
+        adaptive_image_cap_chroma_upper_bounds: &[None, None],
         samples: &[],
     };
 

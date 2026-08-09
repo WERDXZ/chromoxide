@@ -69,8 +69,11 @@ Notes:
 - the default image config caps the working image longest side at 256 pixels
   and builds a statistical cap from prepared pixels (`CapEstimator::Statistical`
   with `CapSource::PreparedPixels`)
-- user palettes can use `cap_policy = "Ignore"`, `"HardIntersect"`, or
-  `"SoftPenalty"`; cap surfaces are always prebuilt by the image pipeline
+- user palettes can use `cap_policy = "Ignore"`, `"HardIntersect"`,
+  `"SoftPenalty"`, or `"AdaptiveSoftPenalty"`; existing `SoftPenalty` entries
+  remain strict and are not automatically upgraded
+- builtin ANSI/Base16 semantic accents use adaptive cap enforcement; the
+  `cover-salient` relative-chroma reference remains strict conditional evidence
 
 ### Reproducibility
 
@@ -102,6 +105,29 @@ The core `chromoxide::solve()` API remains random. Library callers that need the
 versioned deterministic contract should use `chromoxide::solve_with_seed()`.
 Bitwise OkLCh identity is not promised across algorithm versions; within one
 version the target is stable final hex output.
+
+### Faithful vividness
+
+The image cap contains both strict conditional `(L, h)` evidence and a global
+chroma profile for each lightness. Builtin ANSI/Base16 semantic hues query an
+adaptive cap:
+
+```text
+gate = smoothstep01(support_confidence / conditional_hue_threshold)
+adaptive = gate * conditional + (1 - gate) * global
+```
+
+When the image supports a hue, its conditional cap wins. When an ANSI semantic
+hue is absent, the same-lightness global profile supplies the image's overall
+chroma style instead of forcing that slot toward gray. A muted image still has
+a muted global profile, so unsupported semantic hues remain muted when the
+source-wide evidence is muted.
+
+Relative-chroma targets are fixed by builtin role: ANSI 16 dark regular/bright
+use `0.82/0.92`, ANSI 16 light uses `0.78/0.88`, ANSI 8 derived dark/light uses
+`0.86/0.82`, and Base16/Base16 Bright accents use `0.84/0.92`. All use weight
+`2.4`, target delta `0.10`, and `AdaptiveImageCap`; cap penalty weight remains
+`8.0` with Huber delta `0.02`.
 
 ## User palettes
 

@@ -60,6 +60,7 @@ mod tests {
             effective_chroma_lower_bounds: lower,
             effective_chroma_upper_bounds: upper,
             image_cap_chroma_upper_bounds: cap_bounds,
+            adaptive_image_cap_chroma_upper_bounds: cap_bounds,
             samples: &[],
         }
     }

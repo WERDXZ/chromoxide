@@ -62,6 +62,7 @@ fn statistical_cap_uses_all_prepared_pixels_not_exported_outliers() {
             source: CapSource::PreparedPixels,
             estimator: CapEstimator::Statistical(StatisticalCapConfig {
                 percentile: 0.95,
+                global_chroma_percentile: 0.90,
                 tolerance_factor: 0.0,
                 smoothing: 0.0,
                 use_conditional_hue: false,
@@ -113,6 +114,7 @@ fn conditional_hue_does_not_borrow_neighbor_cap() {
             source: CapSource::PreparedPixels,
             estimator: CapEstimator::Statistical(StatisticalCapConfig {
                 percentile: 1.0,
+                global_chroma_percentile: 0.90,
                 tolerance_factor: 0.0,
                 smoothing: 1.0,
                 use_conditional_hue: true,

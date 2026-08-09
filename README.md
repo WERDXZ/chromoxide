@@ -18,13 +18,21 @@ Cap construction and cap enforcement are separate:
 
 - `chromoxide-image::CapEstimator` decides how a cap surface is built from image
   evidence (`MaxObserved` or `Statistical`). The default builds a statistical
-  cap from all prepared pixels, not from the exported 24 samples.
+  conditional cap and a same-lightness global chroma profile from all prepared
+  pixels, not from the exported 24 samples.
 - `CapPolicy` decides how a slot enforces the already-built cap
-  (`Ignore`, `HardIntersect`, or `SoftPenalty`).
+  (`Ignore`, `HardIntersect`, `SoftPenalty`, or `AdaptiveSoftPenalty`).
 
 `HardIntersect` never lowers a slot's user `chroma.min`; problems whose required
 minimum exceeds the cap over the whole slot domain are rejected during
 validation.
+
+`SoftPenalty` remains strict: it uses evidence at the queried `(L, h)`.
+`AdaptiveSoftPenalty` blends that conditional cap with the global profile using
+the original, pre-smoothing support confidence. Supported hues stay
+conditional; an unsupported semantic hue inherits only the image's chroma style
+at the same lightness. The fallback therefore remains tied to source evidence
+and the slot's existing user chroma interval.
 
 ## Usage
 

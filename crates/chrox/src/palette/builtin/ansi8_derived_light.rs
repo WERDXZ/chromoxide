@@ -17,7 +17,7 @@ pub fn ansi_8_derived_light() -> Box<dyn Palette> {
         "ANSI 8 Derived Light",
         slots(),
         terms(),
-        Some(priors::ansi8_terms),
+        Some(priors::ansi8_light_terms),
         PartialSolveConfig {
             seed_count: Some(24),
             keep_top_k: Some(8),

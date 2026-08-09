@@ -96,3 +96,21 @@ fn image_cap_reference_requires_image_cap() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn adaptive_image_cap_reference_requires_cap() {
+    let problem = one_slot_problem(Term::RelativeChromaTarget(RelativeChromaTargetTerm {
+        slot: 0,
+        target: ScalarTarget::Target {
+            value: 0.5,
+            delta: 0.1,
+        },
+        hinge_delta: None,
+        reference: RelativeChromaReference::AdaptiveImageCap,
+    }));
+    let err = problem.validate().unwrap_err().to_string();
+    assert!(
+        err.contains("RelativeChromaReference::AdaptiveImageCap"),
+        "unexpected error: {err}"
+    );
+}

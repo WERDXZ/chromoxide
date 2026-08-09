@@ -4,7 +4,7 @@ use chromoxide::{
 };
 
 fn image_faithful_cap_policy() -> CapPolicy {
-    CapPolicy::SoftPenalty {
+    CapPolicy::AdaptiveSoftPenalty {
         weight: 8.0,
         huber_delta: 0.02,
     }
@@ -106,4 +106,39 @@ pub fn low_chroma_term(name: &str, slot: usize, max: f64) -> WeightedTerm {
 
 pub fn deg(value: f64) -> f64 {
     value.to_radians()
+}
+
+#[cfg(test)]
+mod tests {
+    use chromoxide::{CapPolicy, Interval};
+
+    use super::{accent_slot, neutral_slot, unconstrained_slot};
+
+    #[test]
+    fn builtin_slots_use_expected_adaptive_cap_policy() {
+        let slots = [
+            unconstrained_slot("unconstrained"),
+            neutral_slot("neutral", Interval { min: 0.1, max: 0.2 }, 0.04),
+            accent_slot(
+                "accent",
+                0.0,
+                30.0,
+                Interval { min: 0.4, max: 0.6 },
+                Interval {
+                    min: 0.08,
+                    max: 0.20,
+                },
+            ),
+        ];
+
+        for slot in slots {
+            assert_eq!(
+                slot.domain.cap_policy,
+                CapPolicy::AdaptiveSoftPenalty {
+                    weight: 8.0,
+                    huber_delta: 0.02,
+                }
+            );
+        }
+    }
 }

@@ -207,9 +207,13 @@ The reference interval is explicit:
   `HardIntersect` this is the cap-intersected interval, otherwise the user
   interval)
 - `ImageCap` - `[user min, max(user min, min(user max, image_cap(L, h)))]`
+- `AdaptiveImageCap` - `[user min, max(user min, min(user max,
+  adaptive_image_cap(L, h)))]`
 
-`ImageCap` requires `problem.image_cap`; validation rejects the problem
-otherwise instead of silently falling back.
+`ImageCap` is the strict conditional `(L, h)` reference. `AdaptiveImageCap`
+uses the confidence-aware conditional/global blend described in 6.5. Both
+references require `problem.image_cap`; validation rejects the problem rather
+than silently falling back.
 
 References:
 
@@ -232,8 +236,9 @@ Important parameters:
 - `chroma_epsilon`
   - below this, hue-sensitive behavior is softened
 - `cap_policy`
-  - how a slot enforces an already-built cap: `Ignore`, `HardIntersect`, or
-    `SoftPenalty { weight, huber_delta }`
+  - how a slot enforces an already-built cap: `Ignore`, `HardIntersect`,
+    `SoftPenalty { weight, huber_delta }`, or
+    `AdaptiveSoftPenalty { weight, huber_delta }`
 - `cap_interpolation`
   - how cap values are queried from the cap surface
 
@@ -243,6 +248,9 @@ whose required minimum exceeds the minimum cap over its whole domain is
 rejected during `PaletteProblem::validate` (`min_over_domain`). `SoftPenalty`
 keeps the user chroma interval for decoding and adds
 `weight * pseudo_huber(max(0, C - cap), huber_delta)` to the objective.
+Its `cap` is always the strict conditional cap. `AdaptiveSoftPenalty` keeps the
+same decode interval and penalty formula, weight, and Huber delta, but substitutes
+the adaptive cap from 6.5. It does not change `SoftPenalty` semantics.
 
 How the cap surface is constructed is a separate concern handled by
 `chromoxide-image::CapEstimator` (see 6.5); `CapPolicy` never estimates
@@ -402,6 +410,9 @@ Important parameters:
   - `MaxObserved` or `Statistical`
 - `percentile`
   - weighted per-cell chroma cutoff used by the statistical estimator
+- `global_chroma_percentile`
+  - weighted chroma cutoff across all hues in one lightness row, used to build
+    the low-confidence global fallback profile
 - `tolerance_factor`
   - headroom applied after percentile estimation
 - `smoothing`
@@ -411,9 +422,18 @@ Important parameters:
 - `builder.*`
   - cap-builder-specific parameters from `chromoxide`
 
-### 6.5.1 Conditional hue confidence
+The statistical global profile is calculated directly from the original
+weighted evidence. For every lightness row, it takes the configured weighted
+percentile across all hues; empty rows copy the nearest valid lightness row.
+Only the lightness axis is smoothed, the raw and fully smoothed profiles are
+mixed by `smoothing`, and `1 + tolerance_factor` is applied last. `MaxObserved`
+uses the original per-lightness row maximum and the same fill/lightness-smoothing
+steps, followed by `relax`. The global profile is never reconstructed from a
+hole-filled conditional grid.
 
-Every cap cell carries a support confidence
+### 6.5.1 Conditional, global, and adaptive caps
+
+Every conditional cap cell carries a support confidence
 `cell_mass / row_mass` (clamped to `[0, 1]`). With `use_conditional_hue`, cells
 below `StatisticalCapConfig::CONDITIONAL_HUE_THRESHOLD` get cap `0` and
 confidence `0`, and hue nearest-fill is **not** used. Smoothing is
@@ -422,9 +442,24 @@ confidence-weighted normalized smoothing, and afterwards each cell is gated by
 so a low-support hue cannot borrow full chroma from a neighboring hue. The
 tolerance factor is applied last.
 
-Each `ImageCap` stores the smoothed confidence grid and exposes it through
-`query_with_confidence`; old serialized caps without a confidence grid report
-confidence `1.0`.
+`support_confidence` stores that original pre-smoothing evidence and is what
+adaptive fallback queries. `confidence` stores the blended/smoothed diagnostic
+confidence. For an old serialized cap without `support_confidence`, the query
+uses `confidence` when its shape is valid, otherwise `1.0`.
+
+At a query `(L, h)`, let `conditional` be the strict cap, `global` the
+same-lightness profile, `support` the pre-smoothing confidence, and
+`threshold = StatisticalCapConfig::CONDITIONAL_HUE_THRESHOLD`:
+
+```text
+gate = smoothstep01(support / threshold)
+adaptive = gate * conditional + (1 - gate) * global
+```
+
+Thus support at or above the threshold gives the conditional cap, zero support
+gives the global profile, and intermediate support blends smoothly. Old caps
+without a stored global profile fall back to linearly interpolated per-row
+conditional-grid maxima, always finite and non-negative.
 
 ## 7. Builtin export pipeline
 
@@ -438,6 +473,11 @@ Export can do three kinds of work:
 - direct mapping
 - reorder solved slots into stable names
 - derive additional members from solved colors
+
+ANSI and Base16 semantic accents use `AdaptiveImageCap` relative-chroma targets,
+so their chroma follows the source's same-lightness style even when a particular
+semantic hue is absent. `cover-salient` keeps the strict `ImageCap` reference
+because its salient slots are free to choose hues with real local evidence.
 
 Examples:
 

@@ -295,4 +295,33 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn cover_salient_remains_strict_image_cap() {
+        let relative_terms = terms()
+            .into_iter()
+            .filter_map(|weighted| match weighted.term {
+                Term::RelativeChromaTarget(term) => Some((weighted.weight, term)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(relative_terms.len(), 2);
+        for (expected_slot, (weight, term)) in (1..=2).zip(relative_terms) {
+            assert_eq!(weight, 5.0);
+            assert_eq!(term.slot, expected_slot);
+            assert_eq!(
+                term.reference,
+                chromoxide::RelativeChromaReference::ImageCap
+            );
+            assert_eq!(term.hinge_delta, None);
+            assert!(matches!(
+                term.target,
+                ScalarTarget::Target {
+                    value: 0.90,
+                    delta: 0.10
+                }
+            ));
+        }
+    }
 }

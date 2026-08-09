@@ -111,6 +111,7 @@ fn statistical_cap_builder_downweights_single_outliers() {
             &samples,
             StatisticalCapConfig {
                 percentile: 0.95,
+                global_chroma_percentile: 0.90,
                 tolerance_factor: 0.12,
                 smoothing: 0.0,
                 use_conditional_hue: false,
@@ -171,6 +172,199 @@ fn soft_penalty_problem(cap: chromoxide::ImageCap) -> PaletteProblem {
         terms: vec![],
         config: SolveConfig::default(),
     }
+}
+
+fn conditional_style_cap() -> chromoxide::ImageCap {
+    let mut samples = Vec::new();
+    for l in [0.4, 0.6] {
+        for _ in 0..50 {
+            samples.push(WeightedSample::new(
+                chromoxide::Oklch { l, c: 0.06, h: 0.0 }.to_oklab(),
+                1.0,
+                0.5,
+            ));
+            samples.push(WeightedSample::new(
+                chromoxide::Oklch {
+                    l,
+                    c: 0.16,
+                    h: std::f64::consts::PI,
+                }
+                .to_oklab(),
+                1.0,
+                0.5,
+            ));
+        }
+    }
+
+    ImageCapBuilder {
+        n_l: 2,
+        n_h: 4,
+        smooth_l_radius: 0,
+        smooth_h_radius: 0,
+        relax: 1.0,
+    }
+    .build_statistical(
+        &samples,
+        StatisticalCapConfig {
+            percentile: 0.90,
+            global_chroma_percentile: 0.90,
+            tolerance_factor: 0.0,
+            smoothing: 0.0,
+            use_conditional_hue: true,
+        },
+    )
+    .expect("conditional cap should build")
+}
+
+fn policy_problem(cap: chromoxide::ImageCap, cap_policy: CapPolicy, hue: f64) -> PaletteProblem {
+    PaletteProblem {
+        slots: vec![SlotSpec {
+            name: "accent".to_string(),
+            domain: SlotDomain {
+                lightness: Interval {
+                    min: 0.49,
+                    max: 0.51,
+                },
+                chroma: Interval { min: 0.0, max: 0.2 },
+                hue: HueDomain::Arc {
+                    start: hue - 0.001,
+                    len: 0.002,
+                },
+                cap_policy,
+                chroma_epsilon: 0.02,
+            },
+        }],
+        samples: vec![WeightedSample::new(
+            chromoxide::Oklch {
+                l: 0.5,
+                c: 0.1,
+                h: hue,
+            }
+            .to_oklab(),
+            1.0,
+            0.5,
+        )],
+        image_cap: Some(cap),
+        terms: vec![],
+        config: SolveConfig {
+            cap_interpolation: chromoxide::CapInterpolation::Nearest,
+            ..SolveConfig::default()
+        },
+    }
+}
+
+fn cap_breakdown(problem: &PaletteProblem, name: &str) -> (chromoxide::TermBreakdown, Option<f64>) {
+    problem.validate().expect("problem should validate");
+    let evaluator = ObjectiveEvaluator::new(problem).expect("evaluator should build");
+    let (_, breakdown, decoded) = evaluator
+        .evaluate_breakdown(&[0.0, 2.0, 0.0])
+        .expect("evaluation should succeed");
+    let entry = breakdown
+        .into_iter()
+        .find(|entry| entry.name == name)
+        .unwrap_or_else(|| panic!("missing {name} breakdown"));
+    (entry, decoded.slots[0].cap_at_lh)
+}
+
+#[test]
+fn soft_penalty_remains_strict_conditional() {
+    let problem = policy_problem(
+        conditional_style_cap(),
+        CapPolicy::SoftPenalty {
+            weight: 8.0,
+            huber_delta: 0.02,
+        },
+        std::f64::consts::FRAC_PI_2,
+    );
+    let (entry, decoded_cap) = cap_breakdown(&problem, "soft_cap/accent");
+
+    assert_eq!(entry.components.len(), 2);
+    assert!(entry.components[0] > 0.15);
+    assert_eq!(entry.components[1], 0.0);
+    assert_eq!(decoded_cap, Some(0.0));
+}
+
+#[test]
+fn adaptive_soft_penalty_uses_global_fallback() {
+    let problem = policy_problem(
+        conditional_style_cap(),
+        CapPolicy::AdaptiveSoftPenalty {
+            weight: 8.0,
+            huber_delta: 0.02,
+        },
+        std::f64::consts::FRAC_PI_2,
+    );
+    let (entry, decoded_cap) = cap_breakdown(&problem, "adaptive_soft_cap/accent");
+
+    assert_eq!(entry.components.len(), 5);
+    assert!((entry.components[1] - 0.16).abs() < 1.0e-10);
+    assert_eq!(entry.components[2], 0.0);
+    assert!((entry.components[3] - 0.16).abs() < 1.0e-10);
+    assert_eq!(entry.components[4], 0.0);
+    assert!(entry.components[0] > 0.01);
+    assert_eq!(decoded_cap, Some(entry.components[1]));
+}
+
+#[test]
+fn adaptive_soft_penalty_uses_conditional_when_supported() {
+    let problem = policy_problem(
+        conditional_style_cap(),
+        CapPolicy::AdaptiveSoftPenalty {
+            weight: 8.0,
+            huber_delta: 0.02,
+        },
+        0.0,
+    );
+    let (entry, decoded_cap) = cap_breakdown(&problem, "adaptive_soft_cap/accent");
+
+    assert_eq!(entry.components.len(), 5);
+    assert!((entry.components[1] - 0.06).abs() < 1.0e-10);
+    assert!((entry.components[2] - 0.06).abs() < 1.0e-10);
+    assert!((entry.components[3] - 0.16).abs() < 1.0e-10);
+    assert!((entry.components[4] - 0.5).abs() < 1.0e-10);
+    assert!(entry.components[0] > 0.1);
+    assert_eq!(decoded_cap, Some(entry.components[1]));
+}
+
+#[test]
+fn adaptive_soft_penalty_requires_image_cap() {
+    let mut problem = policy_problem(
+        conditional_style_cap(),
+        CapPolicy::AdaptiveSoftPenalty {
+            weight: 8.0,
+            huber_delta: 0.02,
+        },
+        0.0,
+    );
+    problem.image_cap = None;
+
+    let err = problem.validate().unwrap_err().to_string();
+    assert!(
+        err.contains("AdaptiveSoftPenalty"),
+        "unexpected error: {err}"
+    );
+    assert!(err.contains("image_cap"), "unexpected error: {err}");
+}
+
+#[test]
+fn adaptive_soft_penalty_validates_parameters() {
+    let mut problem = policy_problem(
+        conditional_style_cap(),
+        CapPolicy::AdaptiveSoftPenalty {
+            weight: f64::NAN,
+            huber_delta: 0.02,
+        },
+        0.0,
+    );
+    let err = problem.validate().unwrap_err().to_string();
+    assert!(err.contains("AdaptiveSoftPenalty weight"));
+
+    problem.slots[0].domain.cap_policy = CapPolicy::AdaptiveSoftPenalty {
+        weight: 8.0,
+        huber_delta: 0.0,
+    };
+    let err = problem.validate().unwrap_err().to_string();
+    assert!(err.contains("AdaptiveSoftPenalty huber_delta"));
 }
 
 #[test]

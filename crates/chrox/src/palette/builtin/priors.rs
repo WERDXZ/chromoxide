@@ -2,13 +2,13 @@ use std::f64::consts::TAU;
 
 use chromoxide::{
     GroupAxis, GroupMember, GroupQuantileTerm, GroupTarget, HueTargetTerm, HueUnaryTarget, Oklch,
-    SlotSpec, Term, WeightedSample, WeightedTerm,
+    RelativeChromaReference, RelativeChromaTargetTerm, ScalarTarget, SlotSpec, Term,
+    WeightedSample, WeightedTerm,
 };
 
 use super::common::weighted;
 
 const NEUTRAL_CHROMA_CUTOFF: f64 = 0.08;
-const ACCENT_CHROMA_FLOOR: f64 = 0.05;
 
 #[derive(Clone, Copy, Debug)]
 struct ImagePriors {
@@ -16,45 +16,50 @@ struct ImagePriors {
     neutral_hue_weight: f64,
     neutral_chroma: f64,
     neutral_chroma_half_width: f64,
-    accent_chroma: f64,
 }
 
 pub fn base16_terms(samples: &[WeightedSample], slots: &[SlotSpec]) -> Vec<WeightedTerm> {
-    coherence_terms(
-        samples,
-        slots,
-        &[0, 1, 2, 3, 4, 5, 6, 7],
-        &[8, 9, 10, 11, 12, 13, 14, 15],
-    )
+    let mut terms = coherence_terms(samples, slots, &[0, 1, 2, 3, 4, 5, 6, 7]);
+    append_adaptive_chroma_terms(&mut terms, slots, 8..=15, 0.84);
+    terms
 }
 
 pub fn base16_bright_terms(samples: &[WeightedSample], slots: &[SlotSpec]) -> Vec<WeightedTerm> {
-    coherence_terms(
-        samples,
-        slots,
-        &[0, 1, 2, 3, 4, 5, 6, 7],
-        &[8, 9, 10, 11, 12, 13, 14, 15],
-    )
+    let mut terms = coherence_terms(samples, slots, &[0, 1, 2, 3, 4, 5, 6, 7]);
+    append_adaptive_chroma_terms(&mut terms, slots, 8..=15, 0.92);
+    terms
 }
 
 pub fn ansi16_terms(samples: &[WeightedSample], slots: &[SlotSpec]) -> Vec<WeightedTerm> {
-    coherence_terms(
-        samples,
-        slots,
-        &[0, 8, 7, 15],
-        &[1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14],
-    )
+    let mut terms = coherence_terms(samples, slots, &[0, 8, 7, 15]);
+    append_adaptive_chroma_terms(&mut terms, slots, 1..=6, 0.82);
+    append_adaptive_chroma_terms(&mut terms, slots, 9..=14, 0.92);
+    terms
+}
+
+pub fn ansi16_light_terms(samples: &[WeightedSample], slots: &[SlotSpec]) -> Vec<WeightedTerm> {
+    let mut terms = coherence_terms(samples, slots, &[0, 8, 7, 15]);
+    append_adaptive_chroma_terms(&mut terms, slots, 1..=6, 0.78);
+    append_adaptive_chroma_terms(&mut terms, slots, 9..=14, 0.88);
+    terms
 }
 
 pub fn ansi8_terms(samples: &[WeightedSample], slots: &[SlotSpec]) -> Vec<WeightedTerm> {
-    coherence_terms(samples, slots, &[0, 7], &[1, 2, 3, 4, 5, 6])
+    let mut terms = coherence_terms(samples, slots, &[0, 7]);
+    append_adaptive_chroma_terms(&mut terms, slots, 1..=6, 0.86);
+    terms
+}
+
+pub fn ansi8_light_terms(samples: &[WeightedSample], slots: &[SlotSpec]) -> Vec<WeightedTerm> {
+    let mut terms = coherence_terms(samples, slots, &[0, 7]);
+    append_adaptive_chroma_terms(&mut terms, slots, 1..=6, 0.82);
+    terms
 }
 
 fn coherence_terms(
     samples: &[WeightedSample],
     slots: &[SlotSpec],
     neutral_slots: &[usize],
-    accent_slots: &[usize],
 ) -> Vec<WeightedTerm> {
     let priors = infer_image_priors(samples);
     let mut terms = Vec::new();
@@ -94,25 +99,36 @@ fn coherence_terms(
         }
     }
 
-    let accent_members = group_members(accent_slots, slots.len());
-    if !accent_members.is_empty() {
-        terms.push(weighted(
-            "accent-chroma-band",
-            1.8,
-            Term::GroupQuantile(GroupQuantileTerm {
-                members: accent_members.clone(),
-                axis: GroupAxis::Chroma,
-                target: GroupTarget::ExplicitValues(vec![
-                    priors.accent_chroma;
-                    accent_members.len()
-                ]),
-                monotonic: None,
-                huber_delta: 0.020,
-            }),
-        ));
-    }
-
     terms
+}
+
+fn append_adaptive_chroma_terms(
+    terms: &mut Vec<WeightedTerm>,
+    slots: &[SlotSpec],
+    slot_range: impl Iterator<Item = usize>,
+    target: f64,
+) {
+    terms.extend(
+        slot_range
+            .filter(|&slot| slot < slots.len())
+            .map(|slot| adaptive_chroma_term(slot, &slots[slot].name, target, 2.4)),
+    );
+}
+
+fn adaptive_chroma_term(slot: usize, slot_name: &str, target: f64, weight: f64) -> WeightedTerm {
+    weighted(
+        &format!("{slot_name}-adaptive-chroma"),
+        weight,
+        Term::RelativeChromaTarget(RelativeChromaTargetTerm {
+            slot,
+            target: ScalarTarget::Target {
+                value: target,
+                delta: 0.10,
+            },
+            hinge_delta: None,
+            reference: RelativeChromaReference::AdaptiveImageCap,
+        }),
+    )
 }
 
 fn infer_image_priors(samples: &[WeightedSample]) -> ImagePriors {
@@ -121,9 +137,6 @@ fn infer_image_priors(samples: &[WeightedSample]) -> ImagePriors {
     let mut neutral_chroma_sq_sum = 0.0;
     let mut neutral_a_sum = 0.0;
     let mut neutral_b_sum = 0.0;
-
-    let mut accent_weight = 0.0;
-    let mut accent_chroma_sum = 0.0;
 
     for sample in samples {
         let lch = Oklch::from_oklab(sample.lab);
@@ -141,14 +154,6 @@ fn infer_image_priors(samples: &[WeightedSample]) -> ImagePriors {
             neutral_chroma_sq_sum += neutral_w * lch.c * lch.c;
             neutral_a_sum += neutral_w * sample.lab.a;
             neutral_b_sum += neutral_w * sample.lab.b;
-        }
-
-        let accent_factor = ((lch.c - ACCENT_CHROMA_FLOOR) / 0.16).clamp(0.0, 1.0);
-        let accent_w = base_weight * accent_factor;
-        if accent_w > 0.0 {
-            let capped_chroma = lch.c.min(0.22);
-            accent_weight += accent_w;
-            accent_chroma_sum += accent_w * capped_chroma;
         }
     }
 
@@ -177,18 +182,11 @@ fn infer_image_priors(samples: &[WeightedSample]) -> ImagePriors {
     };
     let neutral_hue_weight = (0.45 + 28.0 * neutral_bias_c).clamp(0.0, 1.8);
 
-    let accent_chroma = if accent_weight > 0.0 {
-        (accent_chroma_sum / accent_weight).clamp(0.08, 0.16)
-    } else {
-        0.12
-    };
-
     ImagePriors {
         neutral_hue,
         neutral_hue_weight,
         neutral_chroma,
         neutral_chroma_half_width,
-        accent_chroma,
     }
 }
 
@@ -203,9 +201,49 @@ fn group_members(slots: &[usize], max_len: usize) -> Vec<GroupMember> {
 
 #[cfg(test)]
 mod tests {
-    use chromoxide::Oklab;
+    use chromoxide::{
+        GroupTarget, Oklab, RelativeChromaReference, ScalarTarget, Term, WeightedTerm,
+    };
 
-    use super::infer_image_priors;
+    use super::{
+        ansi8_light_terms, ansi8_terms, ansi16_light_terms, ansi16_terms, base16_bright_terms,
+        base16_terms, infer_image_priors,
+    };
+    use crate::palette::builtin::common::unconstrained_slot;
+
+    fn test_slots(count: usize) -> Vec<chromoxide::SlotSpec> {
+        (0..count)
+            .map(|slot| unconstrained_slot(&format!("slot-{slot}")))
+            .collect()
+    }
+
+    fn assert_adaptive_targets(terms: &[WeightedTerm], expected: &[(usize, f64)]) {
+        let actual = terms
+            .iter()
+            .filter_map(|weighted| match &weighted.term {
+                Term::RelativeChromaTarget(term) => Some((weighted, term)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual.len(), expected.len());
+        for ((weighted, term), &(slot, value)) in actual.into_iter().zip(expected) {
+            assert_eq!(weighted.weight, 2.4);
+            assert_eq!(term.slot, slot);
+            assert_eq!(term.hinge_delta, None);
+            assert_eq!(term.reference, RelativeChromaReference::AdaptiveImageCap);
+            match &term.target {
+                ScalarTarget::Target {
+                    value: actual_value,
+                    delta,
+                } => {
+                    assert_eq!(*actual_value, value);
+                    assert_eq!(*delta, 0.10);
+                }
+                ref other => panic!("expected target for slot {slot}, got {other:?}"),
+            }
+        }
+    }
 
     #[test]
     fn priors_pick_up_neutral_tint_and_low_chroma() {
@@ -236,30 +274,76 @@ mod tests {
     }
 
     #[test]
-    fn priors_pick_up_accent_chroma_band() {
-        let samples = vec![
-            chromoxide::WeightedSample::new(
-                chromoxide::Oklch {
-                    l: 0.55,
-                    c: 0.14,
-                    h: 0.4,
-                }
-                .to_oklab(),
-                2.0,
-                0.7,
-            ),
-            chromoxide::WeightedSample::new(
-                chromoxide::Oklch {
-                    l: 0.62,
-                    c: 0.12,
-                    h: 2.0,
-                }
-                .to_oklab(),
-                2.0,
-                0.8,
-            ),
-        ];
-        let priors = infer_image_priors(&samples);
-        assert!((0.08..=0.16).contains(&priors.accent_chroma));
+    fn ansi16_regular_and_bright_use_expected_adaptive_targets() {
+        let terms = ansi16_terms(&[], &test_slots(16));
+        let expected = (1..=6)
+            .map(|slot| (slot, 0.82))
+            .chain((9..=14).map(|slot| (slot, 0.92)))
+            .collect::<Vec<_>>();
+        assert_adaptive_targets(&terms, &expected);
+    }
+
+    #[test]
+    fn ansi16_light_uses_expected_adaptive_targets() {
+        let terms = ansi16_light_terms(&[], &test_slots(16));
+        let expected = (1..=6)
+            .map(|slot| (slot, 0.78))
+            .chain((9..=14).map(|slot| (slot, 0.88)))
+            .collect::<Vec<_>>();
+        assert_adaptive_targets(&terms, &expected);
+    }
+
+    #[test]
+    fn ansi8_uses_expected_adaptive_target() {
+        let terms = ansi8_terms(&[], &test_slots(8));
+        let expected = (1..=6).map(|slot| (slot, 0.86)).collect::<Vec<_>>();
+        assert_adaptive_targets(&terms, &expected);
+    }
+
+    #[test]
+    fn ansi8_light_uses_expected_adaptive_target() {
+        let terms = ansi8_light_terms(&[], &test_slots(8));
+        let expected = (1..=6).map(|slot| (slot, 0.82)).collect::<Vec<_>>();
+        assert_adaptive_targets(&terms, &expected);
+    }
+
+    #[test]
+    fn base16_uses_expected_adaptive_target() {
+        let terms = base16_terms(&[], &test_slots(16));
+        let expected = (8..=15).map(|slot| (slot, 0.84)).collect::<Vec<_>>();
+        assert_adaptive_targets(&terms, &expected);
+    }
+
+    #[test]
+    fn base16_bright_uses_expected_adaptive_target() {
+        let terms = base16_bright_terms(&[], &test_slots(16));
+        let expected = (8..=15).map(|slot| (slot, 0.92)).collect::<Vec<_>>();
+        assert_adaptive_targets(&terms, &expected);
+    }
+
+    #[test]
+    fn accent_mean_prior_no_longer_exists() {
+        let terms = ansi16_terms(&[], &test_slots(16));
+        let groups = terms
+            .iter()
+            .filter_map(|weighted| match &weighted.term {
+                Term::GroupQuantile(term) => Some(term),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(
+            groups[0]
+                .members
+                .iter()
+                .map(|member| member.slot)
+                .collect::<Vec<_>>(),
+            vec![0, 8, 7, 15]
+        );
+        assert!(matches!(
+            &groups[0].target,
+            GroupTarget::UniformRange { .. }
+        ));
     }
 }

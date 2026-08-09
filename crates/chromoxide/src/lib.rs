@@ -96,8 +96,8 @@ pub mod terms;
 pub mod util;
 
 pub use cap::{
-    CapBiasCurve, CapInterpolation, ImageCap, ImageCapBuilder, ImageCapDiagnostics,
-    StatisticalCapConfig,
+    AdaptiveCapQuery, CapBiasCurve, CapInterpolation, ImageCap, ImageCapBuilder,
+    ImageCapDiagnostics, StatisticalCapConfig,
 };
 pub use color::{Oklab, Oklch};
 pub use diagnostics::{PaletteSolution, SlotDiagnostics, SolverDiagnostics, TermBreakdown};

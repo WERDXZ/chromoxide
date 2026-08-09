@@ -331,7 +331,7 @@ mod tests {
 
         assert_eq!(
             content_derived_master_seed(&image, &config.image, &config.config).unwrap(),
-            11_703_915_750_292_186_511
+            12_565_224_667_980_208_156
         );
     }
 

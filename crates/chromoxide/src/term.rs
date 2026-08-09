@@ -32,6 +32,8 @@ pub struct EvalContext<'a> {
     pub effective_chroma_upper_bounds: &'a [f64],
     /// Image cap chroma at each slot's solved `(L, h)`, when a cap exists.
     pub image_cap_chroma_upper_bounds: &'a [Option<f64>],
+    /// Adaptive image cap chroma at each slot's solved `(L, h)`, when a cap exists.
+    pub adaptive_image_cap_chroma_upper_bounds: &'a [Option<f64>],
     /// Support samples.
     pub samples: &'a [WeightedSample],
 }
@@ -329,14 +331,17 @@ pub enum RelativeChromaReference {
     /// Ratio relative to the image-supported upper bound
     /// `min(user_max, image_cap(L, h))`, floored at the user minimum.
     ImageCap,
+    /// Ratio relative to the confidence-aware image cap upper bound
+    /// `min(user_max, adaptive_image_cap(L, h))`, floored at the user minimum.
+    AdaptiveImageCap,
 }
 
 /// Relative chroma preference for a single slot.
 ///
-/// The value is the position of the slot's chroma inside its effective
-/// `[chroma_lower_bounds, chroma_upper_bounds]` interval, normalized to
-/// `[0, 1]`. This is the correct way to express "as chromatic as the slot's
-/// feasible interval allows" without hard-coding an absolute chroma target.
+/// The value is the position of the slot's chroma inside the interval selected
+/// by [`RelativeChromaReference`], normalized to `[0, 1]`. This expresses "as
+/// chromatic as the selected evidence allows" without hard-coding an absolute
+/// chroma target.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 pub struct RelativeChromaTargetTerm {

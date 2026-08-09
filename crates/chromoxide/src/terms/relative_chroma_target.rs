@@ -39,6 +39,24 @@ pub fn evaluate(term: &RelativeChromaTargetTerm, ctx: &EvalContext<'_>) -> TermE
             let hi = user_hi.min(cap).max(user_lo);
             (user_lo, hi)
         }
+        RelativeChromaReference::AdaptiveImageCap => {
+            let user_lo = ctx.user_chroma_lower_bounds[slot];
+            let user_hi = ctx.user_chroma_upper_bounds[slot];
+            let Some(cap) = ctx
+                .adaptive_image_cap_chroma_upper_bounds
+                .get(slot)
+                .copied()
+                .flatten()
+            else {
+                return TermEvaluation {
+                    raw: f64::INFINITY,
+                    components: vec![],
+                };
+            };
+            let cap = cap.max(0.0);
+            let hi = user_hi.min(cap).max(user_lo);
+            (user_lo, hi)
+        }
     };
 
     let span = hi - lo;
@@ -77,6 +95,7 @@ mod tests {
         let eff_lower = Box::leak(vec![lo].into_boxed_slice());
         let eff_upper = Box::leak(vec![hi].into_boxed_slice());
         let cap_bounds = Box::leak(vec![None].into_boxed_slice());
+        let adaptive_cap_bounds = Box::leak(vec![None].into_boxed_slice());
         EvalContext {
             slots_lab: lab_slice,
             slots_lch: lch_slice,
@@ -89,6 +108,7 @@ mod tests {
             effective_chroma_lower_bounds: eff_lower,
             effective_chroma_upper_bounds: eff_upper,
             image_cap_chroma_upper_bounds: cap_bounds,
+            adaptive_image_cap_chroma_upper_bounds: adaptive_cap_bounds,
             samples: &[],
         }
     }
@@ -106,7 +126,8 @@ mod tests {
         lch: Oklch,
         user_lo: f64,
         user_hi: f64,
-        cap: Option<f64>,
+        strict_cap: Option<f64>,
+        adaptive_cap: Option<f64>,
     ) -> EvalContext<'static> {
         let lch_slice = Box::leak(vec![lch].into_boxed_slice());
         let lab_slice = Box::leak(vec![lch.to_oklab()].into_boxed_slice());
@@ -116,7 +137,8 @@ mod tests {
         let user_upper = Box::leak(vec![user_hi].into_boxed_slice());
         let eff_lower = Box::leak(vec![user_lo].into_boxed_slice());
         let eff_upper = Box::leak(vec![user_hi].into_boxed_slice());
-        let cap_bounds = Box::leak(vec![cap].into_boxed_slice());
+        let cap_bounds = Box::leak(vec![strict_cap].into_boxed_slice());
+        let adaptive_cap_bounds = Box::leak(vec![adaptive_cap].into_boxed_slice());
         EvalContext {
             slots_lab: lab_slice,
             slots_lch: lch_slice,
@@ -129,6 +151,7 @@ mod tests {
             effective_chroma_lower_bounds: eff_lower,
             effective_chroma_upper_bounds: eff_upper,
             image_cap_chroma_upper_bounds: cap_bounds,
+            adaptive_image_cap_chroma_upper_bounds: adaptive_cap_bounds,
             samples: &[],
         }
     }
@@ -203,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn image_cap_reference_uses_cap_upper_bound() {
+    fn strict_image_cap_reference_remains_conditional() {
         let term = RelativeChromaTargetTerm {
             slot: 0,
             target: ScalarTarget::Target {
@@ -222,6 +245,7 @@ mod tests {
             0.0,
             1.0,
             Some(0.2),
+            Some(0.8),
         );
         let eval = evaluate(&term, &ctx);
         assert!((eval.components[0] - 0.5).abs() < 1.0e-12);
@@ -248,6 +272,7 @@ mod tests {
             0.08,
             1.0,
             Some(0.03),
+            Some(0.7),
         );
         let eval = evaluate(&term, &ctx);
         assert!((eval.components[0] - 1.0).abs() < 1.0e-12);
@@ -276,9 +301,39 @@ mod tests {
             0.0,
             1.0,
             None,
+            Some(0.8),
         );
         let eval = evaluate(&term, &ctx);
         assert!(!eval.raw.is_finite());
         assert!(eval.components.is_empty());
+    }
+
+    #[test]
+    fn adaptive_image_cap_reference_uses_adaptive_upper_bound() {
+        let term = RelativeChromaTargetTerm {
+            slot: 0,
+            target: ScalarTarget::Target {
+                value: 0.5,
+                delta: 0.1,
+            },
+            hinge_delta: None,
+            reference: RelativeChromaReference::AdaptiveImageCap,
+        };
+        let ctx = ctx_with_user_and_cap(
+            Oklch {
+                l: 0.6,
+                c: 0.4,
+                h: 1.0,
+            },
+            0.0,
+            1.0,
+            Some(0.2),
+            Some(0.8),
+        );
+
+        let eval = evaluate(&term, &ctx);
+        assert!((eval.components[0] - 0.5).abs() < 1.0e-12);
+        assert!((eval.components[3] - 0.8).abs() < 1.0e-12);
+        assert!(eval.raw.abs() < 1.0e-10);
     }
 }

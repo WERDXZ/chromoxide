@@ -23,9 +23,16 @@ from `problem.samples`. Slots choose how to enforce that cap:
   user minimum is never lowered, and infeasible domains fail validation
 - `SoftPenalty { weight, huber_delta }` - decode with the user interval and add
   `weight * pseudo_huber(max(0, C - cap), huber_delta)` to the objective
+- `AdaptiveSoftPenalty { weight, huber_delta }` - keep the same user interval,
+  weight, and penalty shape, but use the support-confidence blend of strict
+  conditional and same-lightness global caps
 
 Relative chroma targets can reference the user domain, the decoded effective
-domain, or the image cap directly via `RelativeChromaReference`.
+domain, the strict conditional cap through `ImageCap`, or the confidence-aware
+fallback through `AdaptiveImageCap`. Supported hues use conditional evidence;
+unsupported semantic hues use the source image's global chroma profile at the
+same lightness. The adaptive reference participates directly in optimization
+and remains bounded by the slot's user interval and image-derived cap.
 
 ## Quick start
 
@@ -92,14 +99,17 @@ cargo run -p chromoxide --example synthetic_gradient
 
 ## Reproducibility
 
-Pass a seeded RNG to `solve_with_rng` when you need reproducible runs.
+`solve()` remains the stochastic convenience API, while `solve_with_rng()` lets
+the caller control a stochastic stream. Use `solve_with_seed()` for the stable
+deterministic API: it assigns every local start its own ChaCha stream, so one
+start's RNG consumption cannot perturb another start.
 
 ```rust
-use chromoxide::solve_with_rng;
-use rand::rngs::StdRng;
-use rand::SeedableRng;
+use chromoxide::solve_with_seed;
 
-let mut rng = StdRng::seed_from_u64(42);
-let solution = solve_with_rng(&problem, &mut rng)?;
+let solution = solve_with_seed(&problem, [42; 32])?;
 # Ok::<(), chromoxide::PaletteError>(())
 ```
+
+Bitwise OkLCh identity is not promised across algorithm versions. Within one
+version, identical inputs and solve seed target stable final hex output.

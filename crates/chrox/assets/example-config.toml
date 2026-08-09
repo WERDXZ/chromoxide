@@ -53,7 +53,9 @@ min_cluster_weight = 0.0
 
 [image.cap]
 source = "PreparedPixels"
-estimator = { Statistical = { percentile = 0.95, tolerance_factor = 0.12, smoothing = 1.0, use_conditional_hue = true } }
+# The global percentile builds a source-derived same-lightness fallback used
+# only when local hue support is weak.
+estimator = { Statistical = { percentile = 0.95, global_chroma_percentile = 0.90, tolerance_factor = 0.12, smoothing = 1.0, use_conditional_hue = true } }
 builder = { n_l = 18, n_h = 36, smooth_l_radius = 1, smooth_h_radius = 2, relax = 1.0 }
 
 [config]

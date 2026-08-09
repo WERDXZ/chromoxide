@@ -220,7 +220,7 @@ mod tests {
     use std::path::Path;
     use std::str::FromStr;
 
-    use chromoxide::{ImageCapBuilder, Oklch, WeightedSample};
+    use chromoxide::{CapPolicy, ImageCapBuilder, Oklch, WeightedSample};
 
     use super::PaletteFile;
     use crate::palette::{Palette, SolveError};
@@ -271,6 +271,28 @@ seed_count = 28
         assert_eq!(palette.terms.len(), 1);
         assert_eq!(palette.terms[0].term.default_name(), "cover");
         assert_eq!(palette.config.seed_count, Some(28));
+    }
+
+    #[test]
+    fn user_soft_penalty_remains_strict_policy() {
+        let palette = PaletteFile::from_str(
+            r#"
+name = "strict-soft-cap"
+
+[[slots]]
+name = "accent"
+domain = { lightness = { min = 0.40, max = 0.70 }, chroma = { min = 0.04, max = 0.20 }, hue = "Any", cap_policy = { SoftPenalty = { weight = 8.0, huber_delta = 0.02 } }, chroma_epsilon = 0.02 }
+"#,
+        )
+        .expect("user palette with strict soft policy should parse");
+
+        assert_eq!(
+            palette.slots[0].domain.cap_policy,
+            CapPolicy::SoftPenalty {
+                weight: 8.0,
+                huber_delta: 0.02,
+            }
+        );
     }
 
     #[test]

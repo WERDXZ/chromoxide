@@ -130,6 +130,18 @@ pub enum CapPolicy {
         /// Pseudo-Huber delta for overflow penalties.
         huber_delta: f64,
     },
+    /// Soft penalty against a confidence-aware blend of the conditional image
+    /// cap and the same-lightness global chroma profile.
+    ///
+    /// Unlike [`Self::SoftPenalty`], unsupported hues may borrow the image's
+    /// global chroma style at the decoded lightness. Decode still preserves the
+    /// user-configured chroma interval.
+    AdaptiveSoftPenalty {
+        /// Penalty weight applied to `pseudo_huber(overflow, huber_delta)`.
+        weight: f64,
+        /// Pseudo-Huber delta for overflow penalties.
+        huber_delta: f64,
+    },
 }
 
 /// Slot-level hard domain constraints.
@@ -187,20 +199,27 @@ impl SlotDomain {
             }
         }
 
-        if let CapPolicy::SoftPenalty {
-            weight,
-            huber_delta,
-        } = self.cap_policy
-        {
+        let soft_cap_parameters = match self.cap_policy {
+            CapPolicy::SoftPenalty {
+                weight,
+                huber_delta,
+            } => Some(("SoftPenalty", weight, huber_delta)),
+            CapPolicy::AdaptiveSoftPenalty {
+                weight,
+                huber_delta,
+            } => Some(("AdaptiveSoftPenalty", weight, huber_delta)),
+            CapPolicy::Ignore | CapPolicy::HardIntersect => None,
+        };
+        if let Some((policy, weight, huber_delta)) = soft_cap_parameters {
             if !weight.is_finite() || weight < 0.0 {
-                return Err(PaletteError::InvalidDomain(
-                    "SoftPenalty weight must be finite and >= 0".to_string(),
-                ));
+                return Err(PaletteError::InvalidDomain(format!(
+                    "{policy} weight must be finite and >= 0"
+                )));
             }
             if !huber_delta.is_finite() || huber_delta <= 0.0 {
-                return Err(PaletteError::InvalidDomain(
-                    "SoftPenalty huber_delta must be finite and > 0".to_string(),
-                ));
+                return Err(PaletteError::InvalidDomain(format!(
+                    "{policy} huber_delta must be finite and > 0"
+                )));
             }
         }
 

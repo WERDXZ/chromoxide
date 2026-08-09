@@ -133,7 +133,12 @@ pub fn decode_slot_with_interpolation(
 
     let cap_at_lh = match domain.cap_policy {
         CapPolicy::Ignore => None,
-        _ => image_cap.map(|cap| cap.query_with(l, h, cap_interpolation)),
+        CapPolicy::HardIntersect | CapPolicy::SoftPenalty { .. } => {
+            image_cap.map(|cap| cap.query_with(l, h, cap_interpolation))
+        }
+        CapPolicy::AdaptiveSoftPenalty { .. } => {
+            image_cap.map(|cap| cap.query_adaptive_with(l, h, cap_interpolation).chroma)
+        }
     };
 
     let (c_min, c_max, effective_cap_limit) = match domain.cap_policy {
@@ -153,6 +158,7 @@ pub fn decode_slot_with_interpolation(
             (user_c_min, limit, Some(limit))
         }
         CapPolicy::SoftPenalty { .. } => (user_c_min, user_c_max, cap_at_lh),
+        CapPolicy::AdaptiveSoftPenalty { .. } => (user_c_min, user_c_max, cap_at_lh),
     };
 
     let c_span = (c_max - c_min).max(0.0);

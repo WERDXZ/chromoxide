@@ -254,10 +254,61 @@ pub(crate) fn accent_lightness_target(name: &str, light: bool) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use chromoxide::Oklch;
+    use chromoxide::{ImageCapBuilder, Oklch, StatisticalCapConfig, WeightedSample};
 
     use super::{DeriveAnsiBrightExport, derive_bright, slots};
     use crate::palette::builtin::export::BuiltinExport;
+    use crate::solve_config::PartialSolveConfig;
+
+    const ACCENT_NAMES: [&str; 6] = ["red", "green", "yellow", "blue", "magenta", "cyan"];
+
+    fn synthetic_support(chromas: &[f64; 8]) -> Vec<WeightedSample> {
+        let lightnesses = [0.20, 0.42, 0.50, 0.58, 0.64, 0.70, 0.78, 0.90];
+        lightnesses
+            .into_iter()
+            .zip(chromas.iter().copied())
+            .enumerate()
+            .map(|(index, (l, c))| {
+                WeightedSample::new(
+                    Oklch { l, c, h: 0.45 }.to_oklab(),
+                    1.0 + (index % 3) as f64 * 0.25,
+                    0.20 + index as f64 * 0.08,
+                )
+            })
+            .collect()
+    }
+
+    fn mean_accent_chroma(colors: &std::collections::HashMap<String, Oklch>) -> f64 {
+        ACCENT_NAMES.iter().map(|name| colors[*name].c).sum::<f64>() / ACCENT_NAMES.len() as f64
+    }
+
+    fn solve_synthetic(
+        palette: &dyn crate::palette::Palette,
+        chromas: &[f64; 8],
+        seed: chromoxide::SolveSeed,
+    ) -> std::collections::HashMap<String, Oklch> {
+        let samples = synthetic_support(chromas);
+        let cap = ImageCapBuilder {
+            n_l: 8,
+            n_h: 36,
+            smooth_l_radius: 1,
+            smooth_h_radius: 1,
+            relax: 1.0,
+        }
+        .build_statistical(&samples, StatisticalCapConfig::default())
+        .expect("synthetic image cap should build");
+        palette
+            .solve_with_seed(
+                samples,
+                Some(cap),
+                &PartialSolveConfig {
+                    max_iters: Some(80),
+                    ..Default::default()
+                },
+                seed,
+            )
+            .expect("synthetic ANSI palette should solve")
+    }
 
     #[test]
     fn export_derives_bright_variants() {
@@ -297,5 +348,25 @@ mod tests {
         assert!(members.contains(&"bright_red".to_string()));
         assert!(members.contains(&"black".to_string()));
         assert!(members.contains(&"bright_black".to_string()));
+    }
+
+    #[test]
+    fn vivid_support_produces_more_chromatic_accents_and_repeats_exactly() {
+        let muted = [0.040, 0.050, 0.055, 0.060, 0.052, 0.047, 0.058, 0.045];
+        let vivid = [0.140, 0.150, 0.160, 0.180, 0.170, 0.145, 0.175, 0.155];
+        let seed = [0x5a; 32];
+        let palette = super::ansi_8_derived();
+
+        let muted_colors = solve_synthetic(palette.as_ref(), &muted, seed);
+        let vivid_colors = solve_synthetic(palette.as_ref(), &vivid, seed);
+        let vivid_repeat = solve_synthetic(palette.as_ref(), &vivid, seed);
+
+        assert_eq!(vivid_colors, vivid_repeat);
+        let muted_mean = mean_accent_chroma(&muted_colors);
+        let vivid_mean = mean_accent_chroma(&vivid_colors);
+        assert!(
+            vivid_mean > muted_mean + 0.03,
+            "vivid mean {vivid_mean} must exceed muted mean {muted_mean} by more than 0.03"
+        );
     }
 }
