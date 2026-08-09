@@ -10,5 +10,6 @@ serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
 dirs = "6.0"
 phf = { version = "0.13.1", features = ["macros"] }
+rand = { version = "0.10", features = ["chacha"] }
 chromoxide = { path = "../chromoxide", features = ["serde"] }
 chromoxide-image = { path = "../chromoxide-image", features = ["serde"] }

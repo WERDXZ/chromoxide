@@ -3,10 +3,12 @@
 use std::path::{Path, PathBuf};
 
 use chromoxide::convert::{oklab_to_linear_srgb, relative_luminance};
-use chromoxide_image::prepare_support_from_path;
+use chromoxide_image::{ImageSupport, prepare_support_from_path_with_rng};
 use clap::{Parser, Subcommand};
+use rand::{SeedableRng, rngs::ChaCha8Rng};
 
 use crate::config::Config;
+use crate::determinism::{derive_seed, palette_seed, resolve_master_seed};
 use crate::filter;
 use crate::palette::Palette;
 use crate::palette::registry::{PaletteRecordRef, PaletteRegistry};
@@ -24,6 +26,8 @@ pub enum Error {
     ConfigNotFound { path: PathBuf },
     #[error("failed to load config: {0}")]
     ConfigLoad(#[from] crate::config::Error),
+    #[error("failed to resolve deterministic seed: {0}")]
+    Determinism(#[from] crate::determinism::Error),
     #[error("failed to discover palettes: {0}")]
     PaletteDiscovery(#[source] Box<crate::palette::registry::Error>),
     #[error("palette not found: {id}")]
@@ -71,7 +75,6 @@ impl From<crate::palette::registry::Error> for Error {
 #[command(name = "chrox")]
 #[command(about = "Colorscheme generator based on image.", long_about = None)]
 #[command(arg_required_else_help = true)]
-#[command(args_conflicts_with_subcommands = true)]
 pub struct Args {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -87,6 +90,14 @@ pub struct Args {
     /// Optional configuration file path (overrides defaults)
     #[arg(global = true, short, long, value_name = "CONFIG")]
     config: Option<PathBuf>,
+
+    /// Use an explicit deterministic seed.
+    #[arg(global = true, long, value_name = "U64", conflicts_with = "randomize")]
+    seed: Option<u64>,
+
+    /// Generate a fresh random master seed for this run.
+    #[arg(global = true, long, conflicts_with = "seed")]
+    randomize: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -183,7 +194,8 @@ pub fn run(args: Args) -> Result<(), Error> {
             }
 
             let ctx = load_context(args.config.as_ref(), &args.palettes)?;
-            let support = prepare_support_from_path(&image, &ctx.config.image)?;
+            let (master_seed, support) =
+                prepare_seeded_support(&image, &ctx.config, args.seed, args.randomize)?;
 
             for (idx, palette_id) in palette_ids.iter().enumerate() {
                 let record =
@@ -193,33 +205,18 @@ pub fn run(args: Args) -> Result<(), Error> {
                             id: palette_id.clone(),
                         })?;
 
+                let colors = solve_palette_record(
+                    record,
+                    &support.samples,
+                    support.image_cap.clone(),
+                    &ctx.config.config,
+                    master_seed,
+                )?;
                 let rendered = match record {
                     PaletteRecordRef::User(record) => {
-                        let colors = record
-                            .palette
-                            .solve(
-                                support.samples.clone(),
-                                support.image_cap.clone(),
-                                &ctx.config.config,
-                            )
-                            .map_err(|source| Error::PaletteSolve {
-                                id: record.id.clone(),
-                                source: Box::new(source),
-                            })?;
                         format_palette_output(&record.id, &record.palette.name, &colors)?
                     }
                     PaletteRecordRef::Builtin(record) => {
-                        let palette = (record.build)();
-                        let colors = palette
-                            .solve(
-                                support.samples.clone(),
-                                support.image_cap.clone(),
-                                &ctx.config.config,
-                            )
-                            .map_err(|source| Error::PaletteSolve {
-                                id: record.id.to_string(),
-                                source: Box::new(source),
-                            })?;
                         format_palette_output(record.id, record.name, &colors)?
                     }
                 };
@@ -240,7 +237,13 @@ pub fn run(args: Args) -> Result<(), Error> {
             }
             let ctx = load_context(args.config.as_ref(), &args.palettes)?;
 
-            render_mode(image_path, &ctx, args.config.as_ref())
+            render_mode(
+                image_path,
+                &ctx,
+                args.config.as_ref(),
+                args.seed,
+                args.randomize,
+            )
         }
     }
 }
@@ -249,6 +252,8 @@ fn render_mode(
     image_path: PathBuf,
     ctx: &RunContext,
     config_path: Option<&PathBuf>,
+    explicit_seed: Option<u64>,
+    randomize: bool,
 ) -> Result<(), Error> {
     if ctx.config.templates.is_empty() {
         return Err(Error::NoTemplates);
@@ -270,7 +275,8 @@ fn render_mode(
 
     validate_template_references(&engine, &ctx.registry)?;
 
-    let support = prepare_support_from_path(&image_path, &ctx.config.image)?;
+    let (master_seed, support) =
+        prepare_seeded_support(&image_path, &ctx.config, explicit_seed, randomize)?;
     let palette_ids = engine.required_palettes();
     let mut solved = std::collections::HashMap::with_capacity(palette_ids.len());
     for palette_id in palette_ids {
@@ -285,6 +291,7 @@ fn render_mode(
             &support.samples,
             support.image_cap.clone(),
             &ctx.config.config,
+            master_seed,
         )?;
         solved.insert(palette_id, colors);
     }
@@ -360,22 +367,41 @@ fn solve_palette_record(
     samples: &[chromoxide::WeightedSample],
     image_cap: Option<chromoxide::ImageCap>,
     config: &crate::solve_config::PartialSolveConfig,
+    master_seed: u64,
 ) -> Result<std::collections::HashMap<String, chromoxide::Oklch>, Error> {
+    let solve_seed = palette_seed(master_seed, record)?;
     match record {
         PaletteRecordRef::User(record) => record
             .palette
-            .solve(samples.to_vec(), image_cap, config)
+            .solve_with_seed(samples.to_vec(), image_cap, config, solve_seed)
             .map_err(|source| Error::PaletteSolve {
                 id: record.id.clone(),
                 source: Box::new(source),
             }),
         PaletteRecordRef::Builtin(record) => (record.build)()
-            .solve(samples.to_vec(), image_cap, config)
+            .solve_with_seed(samples.to_vec(), image_cap, config, solve_seed)
             .map_err(|source| Error::PaletteSolve {
                 id: record.id.to_string(),
                 source: Box::new(source),
             }),
     }
+}
+
+fn prepare_seeded_support(
+    image_path: &Path,
+    config: &Config,
+    explicit_seed: Option<u64>,
+    randomize: bool,
+) -> Result<(u64, ImageSupport), Error> {
+    let resolved = resolve_master_seed(image_path, config, explicit_seed, randomize)?;
+    if resolved.is_random {
+        eprintln!("chrox random seed: {}", resolved.seed);
+    }
+
+    let image_seed = derive_seed(resolved.seed, b"image-support", &[]);
+    let mut image_rng = ChaCha8Rng::from_seed(image_seed);
+    let support = prepare_support_from_path_with_rng(image_path, &config.image, &mut image_rng)?;
+    Ok((resolved.seed, support))
 }
 
 fn render_template_source(
@@ -659,6 +685,33 @@ mod tests {
     }
 
     #[test]
+    fn subcommand_accepts_global_seed() {
+        let args =
+            Args::try_parse_from(["chrox", "--seed", "42", "test", "base16", "--", "wall.png"])
+                .expect("global seed should parse before the subcommand");
+
+        assert_eq!(args.seed, Some(42));
+        assert!(!args.randomize);
+    }
+
+    #[test]
+    fn explicit_seed_conflicts_with_randomize() {
+        let error = Args::try_parse_from([
+            "chrox",
+            "test",
+            "base16",
+            "--seed",
+            "42",
+            "--randomize",
+            "--",
+            "wall.png",
+        ])
+        .expect_err("seed and randomize must conflict");
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
     fn test_subcommand_parses_palettes_and_image_after_double_dash() {
         let args =
             Args::try_parse_from(["chrox", "test", "cover-salient", "base16", "--", "wall.png"])
@@ -680,6 +733,8 @@ mod tests {
             image: None,
             palettes: Vec::new(),
             config: None,
+            seed: None,
+            randomize: false,
         })
         .expect_err("missing image should fail");
 
@@ -701,6 +756,8 @@ mod tests {
             image: Some(image_path),
             palettes: vec![missing.clone()],
             config: Some(config_path.clone()),
+            seed: None,
+            randomize: false,
         })
         .expect_err("missing palette path should fail");
 
@@ -732,6 +789,8 @@ palettes = ["palettes"]
             image: Some(image_path),
             palettes: Vec::new(),
             config: Some(config_path.clone()),
+            seed: None,
+            randomize: false,
         })
         .expect_err("missing merged config palette path should fail");
 
@@ -759,6 +818,8 @@ palettes = ["palettes"]
             image: Some(image_path),
             palettes: Vec::new(),
             config: Some(config_path.clone()),
+            seed: None,
+            randomize: false,
         })
         .expect_err("missing templates should fail");
 
@@ -799,6 +860,8 @@ palettes = ["palettes"]
             image: Some(image_path),
             palettes: Vec::new(),
             config: Some(config_path.clone()),
+            seed: None,
+            randomize: false,
         })
         .expect("render mode should succeed");
 
@@ -839,6 +902,8 @@ output = "out/bad.txt"
             image: Some(image_path),
             palettes: Vec::new(),
             config: Some(config_path.clone()),
+            seed: None,
+            randomize: false,
         })
         .expect_err("missing member should fail");
 
@@ -878,6 +943,8 @@ output = "out/bad-filter.txt"
             image: Some(image_path),
             palettes: Vec::new(),
             config: Some(config_path.clone()),
+            seed: None,
+            randomize: false,
         })
         .expect_err("unsupported filter should fail");
 
@@ -914,6 +981,8 @@ output = "out/bad-filter.txt"
             image: None,
             palettes: Vec::new(),
             config: Some(config_path.clone()),
+            seed: None,
+            randomize: false,
         })
         .expect_err("unknown palette should fail");
 

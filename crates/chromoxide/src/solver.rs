@@ -1,5 +1,7 @@
 //! Multi-start L-BFGS solver.
 
+use std::cmp::Ordering;
+
 use argmin::core::{CostFunction, Error as ArgminError, Executor, Gradient};
 use argmin::solver::linesearch::MoreThuenteLineSearch;
 use argmin::solver::quasinewton::LBFGS;
@@ -10,7 +12,7 @@ use crate::diagnostics::{PaletteSolution, SeedDiagnostics, SlotDiagnostics, Solv
 use crate::error::PaletteError;
 use crate::objective::ObjectiveEvaluator;
 use crate::problem::PaletteProblem;
-use crate::seed::generate_seeds;
+use crate::seed::{SolveSeed, generate_seeds, generate_seeds_with_seed};
 use crate::terms::saliency::estimate_saliency_at;
 use crate::util::l2_norm;
 
@@ -54,7 +56,8 @@ struct SeedRun {
 /// Solves a palette optimization problem.
 ///
 /// This convenience entrypoint uses a thread-local RNG.
-/// For reproducible runs, call [`solve_with_rng`] with a seeded RNG.
+/// Use [`solve_with_rng`] for caller-controlled randomness or [`solve_with_seed`]
+/// for the fixed-width deterministic API.
 pub fn solve(problem: &PaletteProblem) -> Result<PaletteSolution, PaletteError> {
     let mut rng = rand::rng();
     solve_with_rng(problem, &mut rng)
@@ -72,9 +75,28 @@ pub fn solve_with_rng(
     rng: &mut dyn Rng,
 ) -> Result<PaletteSolution, PaletteError> {
     problem.validate()?;
-
-    let evaluator = ObjectiveEvaluator::new(problem)?;
     let seeds = generate_seeds(problem, rng)?;
+    solve_from_seeds(problem, seeds)
+}
+
+/// Solves a palette optimization problem with a fixed deterministic seed.
+///
+/// Each local start uses a separate ChaCha stream, so random consumption by
+/// one start cannot affect any other start.
+pub fn solve_with_seed(
+    problem: &PaletteProblem,
+    seed: SolveSeed,
+) -> Result<PaletteSolution, PaletteError> {
+    problem.validate()?;
+    let seeds = generate_seeds_with_seed(problem, seed)?;
+    solve_from_seeds(problem, seeds)
+}
+
+fn solve_from_seeds(
+    problem: &PaletteProblem,
+    seeds: Vec<Vec<f64>>,
+) -> Result<PaletteSolution, PaletteError> {
+    let evaluator = ObjectiveEvaluator::new(problem)?;
 
     let mut runs = Vec::with_capacity(seeds.len());
     for (seed_index, seed) in seeds.iter().enumerate() {
@@ -101,10 +123,8 @@ pub fn solve_with_rng(
         ));
     }
 
-    let best = runs
-        .iter()
-        .min_by(|a, b| a.objective.total_cmp(&b.objective))
-        .expect("non-empty runs");
+    runs.sort_by(compare_seed_runs);
+    let best = runs.first().expect("non-empty runs");
 
     let (objective, term_breakdown, decoded) = evaluator.evaluate_breakdown(&best.param)?;
 
@@ -134,6 +154,7 @@ pub fn solve_with_rng(
 
     let seed_runs = runs
         .iter()
+        .take(problem.config.keep_top_k.get())
         .map(|r| SeedDiagnostics {
             seed_index: r.seed_index,
             objective: r.objective,
@@ -161,6 +182,12 @@ pub fn solve_with_rng(
         slot_diagnostics,
         solver_diagnostics,
     })
+}
+
+fn compare_seed_runs(a: &SeedRun, b: &SeedRun) -> Ordering {
+    a.objective
+        .total_cmp(&b.objective)
+        .then_with(|| a.seed_index.cmp(&b.seed_index))
 }
 
 /// Runs one local L-BFGS solve from a single starting seed.
@@ -213,4 +240,153 @@ fn run_seed(
         iterations: state.iter,
         grad_norm,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cmp::Ordering;
+    use std::num::{NonZeroU64, NonZeroUsize};
+
+    use super::{SeedRun, compare_seed_runs, solve_with_seed};
+    use crate::{
+        CapPolicy, ChromaTargetTerm, HueDomain, Interval, Oklch, PaletteProblem, ScalarTarget,
+        SlotDomain, SlotSpec, Term, WeightedSample, WeightedTerm,
+    };
+
+    fn seed_run(seed_index: usize, objective: f64) -> SeedRun {
+        SeedRun {
+            seed_index,
+            param: vec![0.0; 3],
+            objective,
+            converged: true,
+            iterations: 1,
+            grad_norm: Some(0.0),
+        }
+    }
+
+    fn repeatable_problem() -> PaletteProblem {
+        let config = crate::SolveConfig {
+            seed_count: NonZeroUsize::new(4).expect("seed count is non-zero"),
+            keep_top_k: NonZeroUsize::new(2).expect("diagnostic count is non-zero"),
+            max_iters: NonZeroU64::new(12).expect("iteration count is non-zero"),
+            ..crate::SolveConfig::default()
+        };
+
+        PaletteProblem {
+            slots: vec![SlotSpec {
+                name: "accent".to_string(),
+                domain: SlotDomain {
+                    lightness: Interval { min: 0.3, max: 0.8 },
+                    chroma: Interval { min: 0.0, max: 0.2 },
+                    hue: HueDomain::Any,
+                    cap_policy: CapPolicy::Ignore,
+                    chroma_epsilon: 0.02,
+                },
+            }],
+            samples: vec![WeightedSample::new(
+                Oklch {
+                    l: 0.55,
+                    c: 0.1,
+                    h: 1.4,
+                }
+                .to_oklab(),
+                1.0,
+                0.5,
+            )],
+            image_cap: None,
+            terms: vec![WeightedTerm {
+                weight: 1.0,
+                name: Some("accent-chroma".to_string()),
+                term: Term::ChromaTarget(ChromaTargetTerm {
+                    slot: 0,
+                    target: ScalarTarget::Target {
+                        value: 0.1,
+                        delta: 0.02,
+                    },
+                    hinge_delta: None,
+                }),
+            }],
+            config,
+        }
+    }
+
+    fn assert_solutions_exact(first: &crate::PaletteSolution, second: &crate::PaletteSolution) {
+        assert_eq!(first.colors, second.colors);
+        assert_eq!(first.colors_lch, second.colors_lch);
+        assert_eq!(first.objective, second.objective);
+        assert_eq!(first.seed_index, second.seed_index);
+        assert_eq!(first.converged, second.converged);
+
+        assert_eq!(first.term_breakdown.len(), second.term_breakdown.len());
+        for (a, b) in first.term_breakdown.iter().zip(&second.term_breakdown) {
+            assert_eq!(a.name, b.name);
+            assert_eq!(a.raw, b.raw);
+            assert_eq!(a.weighted, b.weighted);
+            assert_eq!(a.components, b.components);
+        }
+
+        assert_eq!(first.slot_diagnostics.len(), second.slot_diagnostics.len());
+        for (a, b) in first.slot_diagnostics.iter().zip(&second.slot_diagnostics) {
+            assert_eq!(a.name, b.name);
+            assert_eq!(a.final_lab, b.final_lab);
+            assert_eq!(a.final_lch, b.final_lch);
+            assert_eq!(a.relative_luminance, b.relative_luminance);
+            assert_eq!(a.estimated_saliency, b.estimated_saliency);
+            assert_eq!(a.near_chroma_cap, b.near_chroma_cap);
+            assert_eq!(a.cap_margin, b.cap_margin);
+        }
+
+        let a = &first.solver_diagnostics;
+        let b = &second.solver_diagnostics;
+        assert_eq!(a.seed_count, b.seed_count);
+        assert_eq!(a.best_seed_index, b.best_seed_index);
+        assert_eq!(a.converged, b.converged);
+        assert_eq!(a.iterations, b.iterations);
+        assert_eq!(a.final_gradient_norm, b.final_gradient_norm);
+        assert_eq!(a.seed_runs.len(), b.seed_runs.len());
+        for (a, b) in a.seed_runs.iter().zip(&b.seed_runs) {
+            assert_eq!(a.seed_index, b.seed_index);
+            assert_eq!(a.objective, b.objective);
+            assert_eq!(a.converged, b.converged);
+            assert_eq!(a.iterations, b.iterations);
+        }
+    }
+
+    #[test]
+    fn solve_with_seed_is_exactly_repeatable() {
+        let problem = repeatable_problem();
+        let solve_seed = [31; 32];
+
+        let first = solve_with_seed(&problem, solve_seed).unwrap();
+        let second = solve_with_seed(&problem, solve_seed).unwrap();
+
+        assert_solutions_exact(&first, &second);
+        assert_eq!(first.seed_index, first.solver_diagnostics.best_seed_index);
+        assert_eq!(
+            first.solver_diagnostics.seed_runs.len(),
+            problem.config.keep_top_k.get()
+        );
+        assert!(first.solver_diagnostics.seed_runs.windows(2).all(|pair| {
+            pair[0]
+                .objective
+                .total_cmp(&pair[1].objective)
+                .then_with(|| pair[0].seed_index.cmp(&pair[1].seed_index))
+                != Ordering::Greater
+        }));
+    }
+
+    #[test]
+    fn equal_objective_prefers_lower_seed_index() {
+        let lower_index = seed_run(2, 1.5);
+        let higher_index = seed_run(7, 1.5);
+
+        assert_eq!(
+            compare_seed_runs(&lower_index, &higher_index),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare_seed_runs(&higher_index, &lower_index),
+            Ordering::Greater
+        );
+    }
 }

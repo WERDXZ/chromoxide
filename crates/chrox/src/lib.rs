@@ -2,6 +2,7 @@
 
 pub mod cli;
 pub mod config;
+pub mod determinism;
 pub mod filter;
 pub mod palette;
 pub mod solve_config;

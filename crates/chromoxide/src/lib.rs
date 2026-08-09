@@ -104,7 +104,8 @@ pub use diagnostics::{PaletteSolution, SlotDiagnostics, SolverDiagnostics, TermB
 pub use domain::{CapPolicy, HueDomain, Interval, SlotDomain};
 pub use error::PaletteError;
 pub use problem::{GradientMode, PaletteProblem, SlotSpec, SolveConfig};
-pub use solver::{solve, solve_with_rng};
+pub use seed::SolveSeed;
+pub use solver::{solve, solve_with_rng, solve_with_seed};
 pub use support::WeightedSample;
 pub use term::{
     ChromaTargetTerm, ContrastTerm, CoverTerm, DeltaCTarget, DeltaHTarget, DeltaLTarget, GroupAxis,

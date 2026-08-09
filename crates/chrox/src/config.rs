@@ -60,7 +60,9 @@ impl Default for Config {
 impl FromStr for Config {
     type Err = Error;
     fn from_str(input: &str) -> Result<Self, Error> {
-        toml::from_str(input).map_err(|source| Error::Parse { source })
+        let config: Self = toml::from_str(input).map_err(|source| Error::Parse { source })?;
+        config.validate()?;
+        Ok(config)
     }
 }
 
@@ -93,7 +95,14 @@ impl Config {
             source,
         })?;
 
-        toml::from_str(&input).map_err(|source| Error::ParseAtPath { path, source })
+        let config: Self =
+            toml::from_str(&input).map_err(|source| Error::ParseAtPath { path, source })?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<(), Error> {
+        self.general.reproducibility.validate()
     }
 
     pub fn find_template(&self, name: &str) -> Option<&TemplateEntry> {
@@ -128,6 +137,54 @@ impl Config {
 pub struct GeneralConfig {
     #[serde(default)]
     pub palettes: Vec<PathBuf>,
+    #[serde(default)]
+    pub reproducibility: ReproducibilityConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReproducibilityMode {
+    ContentDerived,
+    Fixed,
+    Random,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct ReproducibilityConfig {
+    pub mode: ReproducibilityMode,
+    #[serde(default)]
+    pub seed: Option<u64>,
+}
+
+impl Default for ReproducibilityConfig {
+    fn default() -> Self {
+        Self {
+            mode: ReproducibilityMode::ContentDerived,
+            seed: None,
+        }
+    }
+}
+
+impl ReproducibilityConfig {
+    fn validate(&self) -> Result<(), Error> {
+        let message = match (self.mode, self.seed) {
+            (ReproducibilityMode::ContentDerived, Some(_)) => {
+                Some("general.reproducibility.seed must be omitted when mode is content_derived")
+            }
+            (ReproducibilityMode::Fixed, None) => {
+                Some("general.reproducibility.seed is required when mode is fixed")
+            }
+            (ReproducibilityMode::Random, Some(_)) => {
+                Some("general.reproducibility.seed must be omitted when mode is random")
+            }
+            _ => None,
+        };
+
+        match message {
+            Some(message) => Err(Error::InvalidReproducibility { message }),
+            None => Ok(()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -246,6 +303,8 @@ pub enum Error {
         #[source]
         source: toml::de::Error,
     },
+    #[error("{message}")]
+    InvalidReproducibility { message: &'static str },
 }
 
 #[cfg(test)]
@@ -254,7 +313,7 @@ mod tests {
     use std::str::FromStr;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::Config;
+    use super::{Config, Error, ReproducibilityMode};
 
     fn unique_temp_dir() -> PathBuf {
         let nanos = SystemTime::now()
@@ -464,5 +523,90 @@ palettes = ["palettes", "/opt/chrox/palettes"]
                 PathBuf::from("extra"),
             ]
         );
+    }
+
+    #[test]
+    fn reproducibility_config_accepts_valid_mode_seed_combinations() {
+        let content_derived = Config::from_str(
+            r#"
+[general.reproducibility]
+mode = "content_derived"
+"#,
+        )
+        .expect("content-derived mode without a seed should be valid");
+        assert_eq!(
+            content_derived.general.reproducibility.mode,
+            ReproducibilityMode::ContentDerived
+        );
+        assert_eq!(content_derived.general.reproducibility.seed, None);
+
+        let fixed = Config::from_str(
+            r#"
+[general.reproducibility]
+mode = "fixed"
+seed = 42
+"#,
+        )
+        .expect("fixed mode with a seed should be valid");
+        assert_eq!(
+            fixed.general.reproducibility.mode,
+            ReproducibilityMode::Fixed
+        );
+        assert_eq!(fixed.general.reproducibility.seed, Some(42));
+
+        let random = Config::from_str(
+            r#"
+[general.reproducibility]
+mode = "random"
+"#,
+        )
+        .expect("random mode without a seed should be valid");
+        assert_eq!(
+            random.general.reproducibility.mode,
+            ReproducibilityMode::Random
+        );
+        assert_eq!(random.general.reproducibility.seed, None);
+    }
+
+    #[test]
+    fn reproducibility_config_rejects_invalid_mode_seed_combinations() {
+        let cases = [
+            (
+                "[general.reproducibility]\nmode = \"content_derived\"\nseed = 1\n",
+                "general.reproducibility.seed must be omitted when mode is content_derived",
+            ),
+            (
+                "[general.reproducibility]\nmode = \"fixed\"\n",
+                "general.reproducibility.seed is required when mode is fixed",
+            ),
+            (
+                "[general.reproducibility]\nmode = \"random\"\nseed = 1\n",
+                "general.reproducibility.seed must be omitted when mode is random",
+            ),
+        ];
+
+        for (input, expected) in cases {
+            let error = Config::from_str(input).expect_err("invalid combination should fail");
+            assert!(matches!(error, Error::InvalidReproducibility { .. }));
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn from_path_applies_reproducibility_validation() {
+        let dir = unique_temp_dir();
+        std::fs::create_dir_all(&dir).expect("test temp dir should be created");
+        let config_path = dir.join("config.toml");
+        std::fs::write(
+            &config_path,
+            "[general.reproducibility]\nmode = \"fixed\"\n",
+        )
+        .expect("config should be written");
+
+        let error = Config::from_path(&config_path).expect_err("invalid file config should fail");
+        assert!(matches!(error, Error::InvalidReproducibility { .. }));
+
+        let _ = std::fs::remove_file(config_path);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

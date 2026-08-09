@@ -9,7 +9,7 @@ repository = "https://github.com/werdxz/chromoxide"
 [dependencies]
 argmin = "0.11"
 argmin-math = { version = "0.5", default-features = false, features = ["vec"] }
-rand = "0.10"
+rand = { version = "0.10", features = ["chacha"] }
 thiserror = "2"
 serde = { version = "1", features = ["derive"], optional = true }
 

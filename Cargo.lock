@@ -310,6 +310,7 @@ dependencies = [
  "clap",
  "dirs",
  "phf",
+ "rand 0.10.0",
  "serde",
  "thiserror",
  "toml",

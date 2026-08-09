@@ -26,7 +26,7 @@ use chromoxide::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{Palette, SolveError, solve_problem};
+use super::{Palette, SolveError, solve_problem, solve_problem_with_seed};
 use crate::solve_config::{Error as SolveConfigError, PartialSolveConfig};
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -148,6 +148,19 @@ impl Palette for PaletteFile {
             .clone()
             .build_problem_with_cap(samples, image_cap, global_config)?;
         solve_problem(&problem)
+    }
+
+    fn solve_with_seed(
+        &self,
+        samples: Vec<WeightedSample>,
+        image_cap: Option<ImageCap>,
+        global_config: &PartialSolveConfig,
+        seed: chromoxide::SolveSeed,
+    ) -> Result<HashMap<String, Oklch>, SolveError> {
+        let problem = self
+            .clone()
+            .build_problem_with_cap(samples, image_cap, global_config)?;
+        solve_problem_with_seed(&problem, seed)
     }
 }
 
@@ -476,5 +489,37 @@ term = { Cover = { slots = [0], tau = 0.02, delta = 0.03 } }
             .solve(Vec::new(), None, &PartialSolveConfig::default())
             .expect_err("empty samples should fail");
         assert!(matches!(err, SolveError::BuildProblem(_)));
+    }
+
+    #[test]
+    fn trait_seeded_solve_is_exactly_repeatable() {
+        let palette = PaletteFile::from_str(
+            r#"
+name = "seeded-demo"
+
+[[slots]]
+name = "accent"
+domain = { lightness = { min = 0.20, max = 0.80 }, chroma = { min = 0.02, max = 0.20 }, hue = "Any", cap_policy = "Ignore", chroma_epsilon = 0.02 }
+
+[[terms]]
+weight = 1.0
+term = { Cover = { slots = [0], tau = 0.02, delta = 0.03 } }
+
+[config]
+seed_count = 2
+max_iters = 3
+"#,
+        )
+        .expect("palette should parse");
+        let seed = [0x5a; 32];
+
+        let first = palette
+            .solve_with_seed(one_sample(), None, &PartialSolveConfig::default(), seed)
+            .expect("first seeded solve should succeed");
+        let second = palette
+            .solve_with_seed(one_sample(), None, &PartialSolveConfig::default(), seed)
+            .expect("second seeded solve should succeed");
+
+        assert_eq!(first, second);
     }
 }

@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use chromoxide::{ImageCap, Oklch, PaletteProblem, SlotSpec, WeightedSample, WeightedTerm, solve};
+use chromoxide::{
+    ImageCap, Oklch, PaletteProblem, SlotSpec, WeightedSample, WeightedTerm, solve,
+    solve_with_seed as core_solve_with_seed,
+};
 
 use super::export::BuiltinExport;
 use crate::palette::{Palette, SolveError};
@@ -94,6 +97,18 @@ impl Palette for BuiltinPalette {
     ) -> Result<HashMap<String, Oklch>, SolveError> {
         let problem = self.build_problem(samples, image_cap, global_config)?;
         let solution = solve(&problem).map_err(SolveError::Solver)?;
+        Ok(self.export.export(&self.slots, &solution.colors_lch))
+    }
+
+    fn solve_with_seed(
+        &self,
+        samples: Vec<WeightedSample>,
+        image_cap: Option<ImageCap>,
+        global_config: &PartialSolveConfig,
+        seed: chromoxide::SolveSeed,
+    ) -> Result<HashMap<String, Oklch>, SolveError> {
+        let problem = self.build_problem(samples, image_cap, global_config)?;
+        let solution = core_solve_with_seed(&problem, seed).map_err(SolveError::Solver)?;
         Ok(self.export.export(&self.slots, &solution.colors_lch))
     }
 }

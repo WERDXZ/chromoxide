@@ -98,6 +98,24 @@ For a full image‑based pipeline, see the examples in `chromoxide‑image`.
 
 For CLI-driven palette generation and template rendering, see `crates/chrox/README.md`.
 
+## Reproducibility
+
+The `chrox` CLI defaults to content-derived deterministic runs: it hashes the
+image bytes plus the image and global solve configuration, then derives
+domain-separated RNG seeds for image sampling and each palette solve. Use
+`--seed <U64>` to select an explicit deterministic master seed, or
+`--randomize` to generate and print a fresh master seed for exploration.
+
+The core library keeps [`solve`](crates/chromoxide/src/solver.rs) as a random
+convenience API and [`solve_with_rng`](crates/chromoxide/src/solver.rs) as the
+caller-controlled RNG API. Use
+[`solve_with_seed`](crates/chromoxide/src/solver.rs) for the stable deterministic
+contract; every local start gets an independent ChaCha stream.
+
+Determinism is versioned with the algorithm. Bitwise-identical OkLCh values are
+not promised across different algorithm versions; within one algorithm version,
+the goal is stable final hex output for identical inputs.
+
 ## Examples
 
 Run the workspace examples with:

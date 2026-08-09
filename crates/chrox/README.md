@@ -41,6 +41,9 @@ Example:
 [general]
 palettes = ["~/.local/share/chrox/palettes"]
 
+[general.reproducibility]
+mode = "content_derived"
+
 [[templates]]
 name = "alacritty"
 input = "templates/alacritty.toml"
@@ -69,6 +72,37 @@ Notes:
 - user palettes can use `cap_policy = "Ignore"`, `"HardIntersect"`, or
   `"SoftPenalty"`; cap surfaces are always prebuilt by the image pipeline
 
+### Reproducibility
+
+The CLI defaults to `content_derived`: identical image bytes, image config,
+global solve config, palette definition, and seed mode produce the same image
+support and palette result within the same determinism algorithm version. Copying
+an image to another path does not change its master seed.
+
+```toml
+[general.reproducibility]
+mode = "content_derived"
+
+# Or use an explicit configured seed:
+# mode = "fixed"
+# seed = 42
+
+# Or request a fresh seed on every run:
+# mode = "random"
+```
+
+CLI precedence is `--seed` over `--randomize` over configuration. Random mode
+prints `chrox random seed: <u64>` to stderr so the run can be repeated with
+`--seed <u64>`. Content-derived and fixed modes are silent. The image pipeline
+and each palette solver use separate domain-derived sub-seeds; palettes never
+share one mutable RNG, so solve order and unrelated palettes do not perturb a
+result.
+
+The core `chromoxide::solve()` API remains random. Library callers that need the
+versioned deterministic contract should use `chromoxide::solve_with_seed()`.
+Bitwise OkLCh identity is not promised across algorithm versions; within one
+version the target is stable final hex output.
+
 ## User palettes
 
 User palettes are TOML files made of `slots`, `terms`, and optional solve config.
@@ -96,6 +130,8 @@ Useful commands:
 chrox list
 chrox show base16
 chrox test cover-salient base16 -- ~/Pictures/wallpaper.jpg
+chrox --seed 42 test cover-salient base16 -- ~/Pictures/wallpaper.jpg
+chrox --randomize test cover-salient -- ~/Pictures/wallpaper.jpg
 chrox --config ~/.config/chrox/config.toml ~/Pictures/wallpaper.jpg
 ```
 

@@ -7,6 +7,14 @@ palettes = [
   ".local/share/chrox/palettes",
 ]
 
+[general.reproducibility]
+mode = "content_derived"
+# For a configured deterministic seed instead:
+# mode = "fixed"
+# seed = 42
+# For a fresh seed on each run (printed to stderr):
+# mode = "random"
+
 [[templates]]
 name = "alacritty"
 input = "templates/alacritty.toml"

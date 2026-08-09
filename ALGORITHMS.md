@@ -35,6 +35,15 @@ Examples:
 
 Multi-start helps by trying several initial guesses and keeping the best one found.
 
+`solve_with_seed` expands one 32-byte solve seed into an ordered seed plan:
+random starts, then group-targeted starts, then support-aware starts. Each plan
+index initializes `ChaCha8Rng` from the same seed and selects its own `u64`
+stream id, so changing the random consumption of start 0 cannot perturb start
+1. Equal objectives are ordered by the lower seed index, including diagnostics.
+
+The random `solve` convenience API and caller-controlled `solve_with_rng` API
+remain available. The deterministic contract is specifically `solve_with_seed`.
+
 Important parameters:
 
 - `seed_count`
@@ -63,6 +72,31 @@ Important parameters:
 References:
 
 - Finite difference: <https://en.wikipedia.org/wiki/Finite_difference>
+
+## 3.1 CLI seed derivation
+
+`chrox` resolves a `u64` master seed in this precedence order:
+
+1. `--seed <U64>`
+2. `--randomize`
+3. `[general.reproducibility]`
+
+The default `content_derived` mode applies versioned FNV-1a hashing to
+length-prefixed components: image file bytes (streamed), canonical TOML for the
+image config, and canonical TOML for the global solve config. Paths, templates,
+output destinations, palette search paths, and palette solve order are excluded.
+
+Fixed SplitMix64 expansion derives 32-byte sub-seeds with domain separation.
+The `image-support` sub-seed drives only image sampling. Every palette receives
+its own `palette-solve` sub-seed derived from its id and stable fingerprint;
+builtins use their builtin id, while user palettes include source bytes (or the
+canonical serialized palette when no source path exists). Therefore image and
+solver randomness do not share mutable state, palette order is irrelevant, and
+adding an unrelated palette cannot change an existing palette.
+
+The algorithm carries an explicit determinism version. Cross-version bitwise
+OkLCh identity is not guaranteed; stable final hex is the target within the same
+algorithm version.
 
 ## 4. Objective design
 
