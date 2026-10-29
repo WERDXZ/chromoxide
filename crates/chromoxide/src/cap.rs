@@ -129,7 +129,8 @@ pub struct StatisticalCapConfig {
     /// Weighted percentile used per populated `(L, h)` cell.
     pub percentile: f64,
     /// Weighted chroma percentile across all hues within one lightness row,
-    /// used as the low-confidence fallback profile.
+    /// bounded by the same percentile over the full image. This limits the
+    /// low-confidence fallback without restricting directly supported hues.
     #[cfg_attr(feature = "serde", serde(default = "default_global_chroma_percentile"))]
     pub global_chroma_percentile: f64,
     /// Headroom multiplier applied after percentile estimation.
@@ -590,7 +591,7 @@ impl ImageCapBuilder {
             }
         }
 
-        let global_raw = row_samples
+        let mut global_raw = row_samples
             .iter_mut()
             .map(|samples| {
                 if samples.is_empty() {
@@ -600,6 +601,18 @@ impl ImageCapBuilder {
                 }
             })
             .collect::<Vec<_>>();
+
+        // A singleton in its own lightness row has full row-relative mass.
+        // Bound the fallback by full-image mass before filling empty rows, so
+        // rare chroma cannot spread to hues with no direct support. The local
+        // conditional grid remains intact, including supported minority hues.
+        let mut pooled = row_samples.into_iter().flatten().collect::<Vec<_>>();
+        let image_chroma = weighted_percentile(&mut pooled, config.global_chroma_percentile);
+        for row in &mut global_raw {
+            if row.is_finite() {
+                *row = row.min(image_chroma);
+            }
+        }
 
         if config.use_conditional_hue {
             Ok(self.finish_conditional_grid(grid, confidence, global_raw, config, l_min, l_max))
