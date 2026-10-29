@@ -7,6 +7,9 @@ use super::recipe::BuiltinPalette;
 use crate::palette::Palette;
 use crate::solve_config::PartialSolveConfig;
 
+#[cfg(test)]
+mod fidelity_experiment;
+
 pub fn base16() -> Box<dyn Palette> {
     Box::new(BuiltinPalette::new_with_dynamic_terms(
         "base16",
