@@ -60,7 +60,7 @@ pub fn derive_seed(master: u64, domain: &[u8], components: &[&[u8]]) -> [u8; 32]
 
     let mut state = hasher.finish();
     let mut output = [0_u8; 32];
-    for chunk in output.chunks_exact_mut(std::mem::size_of::<u64>()) {
+    for chunk in output.as_chunks_mut::<8>().0 {
         chunk.copy_from_slice(&splitmix64_next(&mut state).to_le_bytes());
     }
     output
