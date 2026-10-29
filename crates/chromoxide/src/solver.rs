@@ -2,7 +2,10 @@
 
 use std::cmp::Ordering;
 
-use argmin::core::{CostFunction, Error as ArgminError, Executor, Gradient};
+use argmin::core::{
+    CostFunction, Error as ArgminError, Executor, Gradient, IterState, TerminationReason,
+    TerminationStatus,
+};
 use argmin::solver::linesearch::MoreThuenteLineSearch;
 use argmin::solver::quasinewton::LBFGS;
 use argmin_math as _;
@@ -14,7 +17,6 @@ use crate::objective::ObjectiveEvaluator;
 use crate::problem::PaletteProblem;
 use crate::seed::{SolveSeed, generate_seeds, generate_seeds_with_seed};
 use crate::terms::saliency::estimate_saliency_at;
-use crate::util::l2_norm;
 
 struct ArgminAdapter<'a> {
     evaluator: ObjectiveEvaluator<'a>,
@@ -51,6 +53,7 @@ struct SeedRun {
     converged: bool,
     iterations: u64,
     grad_norm: Option<f64>,
+    termination_reason: Option<String>,
 }
 
 /// Solves a palette optimization problem.
@@ -102,7 +105,7 @@ fn solve_from_seeds(
     for (seed_index, seed) in seeds.iter().enumerate() {
         match run_seed(&evaluator, problem, seed_index, seed.clone()) {
             Ok(run) => runs.push(run),
-            Err(_) => {
+            Err(error) => {
                 if let Ok(objective) = evaluator.evaluate_total(seed) {
                     runs.push(SeedRun {
                         seed_index,
@@ -111,6 +114,7 @@ fn solve_from_seeds(
                         converged: false,
                         iterations: 0,
                         grad_norm: None,
+                        termination_reason: Some(format!("Solver failed: {error}")),
                     });
                 }
             }
@@ -160,6 +164,7 @@ fn solve_from_seeds(
             objective: r.objective,
             converged: r.converged,
             iterations: r.iterations,
+            termination_reason: r.termination_reason.clone(),
         })
         .collect::<Vec<_>>();
 
@@ -169,6 +174,7 @@ fn solve_from_seeds(
         converged: best.converged,
         iterations: best.iterations,
         final_gradient_norm: best.grad_norm,
+        termination_reason: best.termination_reason.clone(),
         seed_runs,
     };
 
@@ -214,7 +220,17 @@ fn run_seed(
         .run()
         .map_err(|e| PaletteError::SolverFailure(format!("argmin run failed: {e}")))?;
 
-    let state = result.state;
+    seed_run_from_state(evaluator, problem, seed_index, result.state)
+}
+
+type SolverState = IterState<Vec<f64>, Vec<f64>, (), (), (), f64>;
+
+fn seed_run_from_state(
+    evaluator: &ObjectiveEvaluator<'_>,
+    problem: &PaletteProblem,
+    seed_index: usize,
+    state: SolverState,
+) -> Result<SeedRun, PaletteError> {
     let param = state
         .best_param
         .clone()
@@ -228,9 +244,20 @@ fn run_seed(
     } else {
         evaluator.evaluate_total(&param)?
     };
-    let grad_norm = state.grad.as_ref().map(|g| l2_norm(g));
-
-    let converged = state.termination_status.terminated() && state.iter < state.max_iters;
+    // `state.grad` can belong to the last iterate rather than `best_param`, or
+    // be absent after a line-search failure. Audit the parameters we return.
+    let grad_norm = evaluator
+        .gradient_norm(&param, problem.config.fd_epsilon)
+        .ok()
+        .filter(|norm| norm.is_finite());
+    let converged = matches!(
+        state.termination_status,
+        TerminationStatus::Terminated(TerminationReason::SolverConverged)
+    );
+    let termination_reason = match &state.termination_status {
+        TerminationStatus::Terminated(reason) => Some(reason.to_string()),
+        TerminationStatus::NotTerminated => None,
+    };
 
     Ok(SeedRun {
         seed_index,
@@ -239,6 +266,7 @@ fn run_seed(
         converged,
         iterations: state.iter,
         grad_norm,
+        termination_reason,
     })
 }
 
@@ -247,11 +275,13 @@ mod tests {
     use std::cmp::Ordering;
     use std::num::{NonZeroU64, NonZeroUsize};
 
-    use super::{SeedRun, compare_seed_runs, solve_with_seed};
+    use super::{SeedRun, SolverState, compare_seed_runs, seed_run_from_state, solve_with_seed};
+    use crate::objective::ObjectiveEvaluator;
     use crate::{
         CapPolicy, ChromaTargetTerm, HueDomain, Interval, Oklch, PaletteProblem, ScalarTarget,
         SlotDomain, SlotSpec, Term, WeightedSample, WeightedTerm,
     };
+    use argmin::core::{State, TerminationReason};
 
     fn seed_run(seed_index: usize, objective: f64) -> SeedRun {
         SeedRun {
@@ -261,6 +291,7 @@ mod tests {
             converged: true,
             iterations: 1,
             grad_norm: Some(0.0),
+            termination_reason: Some("Solver converged".into()),
         }
     }
 
@@ -343,12 +374,14 @@ mod tests {
         assert_eq!(a.converged, b.converged);
         assert_eq!(a.iterations, b.iterations);
         assert_eq!(a.final_gradient_norm, b.final_gradient_norm);
+        assert_eq!(a.termination_reason, b.termination_reason);
         assert_eq!(a.seed_runs.len(), b.seed_runs.len());
         for (a, b) in a.seed_runs.iter().zip(&b.seed_runs) {
             assert_eq!(a.seed_index, b.seed_index);
             assert_eq!(a.objective, b.objective);
             assert_eq!(a.converged, b.converged);
             assert_eq!(a.iterations, b.iterations);
+            assert_eq!(a.termination_reason, b.termination_reason);
         }
     }
 
@@ -387,6 +420,65 @@ mod tests {
         assert_eq!(
             compare_seed_runs(&higher_index, &lower_index),
             Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn early_solver_exit_is_not_reported_as_convergence() {
+        let problem = repeatable_problem();
+        let evaluator = ObjectiveEvaluator::new(&problem).unwrap();
+        for reason in [
+            TerminationReason::SolverExit("Line search terminated".into()),
+            TerminationReason::Interrupt,
+            TerminationReason::Timeout,
+            TerminationReason::MaxItersReached,
+        ] {
+            let mut state = SolverState::new()
+                .param(vec![0.0; 3])
+                .max_iters(20)
+                .terminate_with(reason.clone());
+            state.iter = 3;
+            let run = seed_run_from_state(&evaluator, &problem, 0, state).unwrap();
+            assert!(!run.converged, "{reason:?} must not count as convergence");
+            assert_eq!(run.termination_reason.as_deref(), Some(reason.text()));
+        }
+    }
+
+    #[test]
+    fn reported_gradient_belongs_to_returned_best_parameters() {
+        let problem = repeatable_problem();
+        let evaluator = ObjectiveEvaluator::new(&problem).unwrap();
+        let best = vec![0.0, -1.0, 0.0];
+        let expected = evaluator
+            .gradient_norm(&best, problem.config.fd_epsilon)
+            .unwrap();
+        for last_gradient in [None, Some(vec![99.0; 3])] {
+            let mut state = SolverState::new()
+                .param(vec![0.0; 3])
+                .max_iters(20)
+                .terminate_with(TerminationReason::SolverExit("line search failed".into()));
+            state.best_param = Some(best.clone());
+            state.best_cost = evaluator.evaluate_total(&best).unwrap();
+            state.grad = last_gradient;
+            let run = seed_run_from_state(&evaluator, &problem, 0, state).unwrap();
+            assert_eq!(run.param, best);
+            assert_eq!(run.grad_norm, Some(expected));
+        }
+    }
+
+    #[test]
+    fn convergence_on_last_allowed_iteration_remains_convergence() {
+        let problem = repeatable_problem();
+        let evaluator = ObjectiveEvaluator::new(&problem).unwrap();
+        let mut state = SolverState::new()
+            .param(vec![0.0; 3])
+            .max_iters(20)
+            .terminate_with(TerminationReason::SolverConverged);
+        state.iter = 20;
+        assert!(
+            seed_run_from_state(&evaluator, &problem, 0, state)
+                .unwrap()
+                .converged
         );
     }
 }

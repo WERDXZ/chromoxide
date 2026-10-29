@@ -34,6 +34,31 @@ unsupported semantic hues use the source image's global chroma profile at the
 same lightness. The adaptive reference participates directly in optimization
 and remains bounded by the slot's user interval and image-derived cap.
 
+New statistical caps bound each row's all-hue fallback percentile by the same
+weighted percentile over the full image, before hole filling, smoothing, and
+tolerance headroom. A rare saturated pixel in its own lightness row therefore
+cannot lend a high cap to unsupported hues. The conditional grid retains its
+local evidence, so directly supported minority colors can still exceed the
+global fallback. This uses `global_chroma_percentile`; setting it to 1.0 retains
+the maximum-based fallback envelope. Max-observed builders and already serialized
+cap profiles keep their existing behavior; rebuild a statistical cap to obtain
+the bounded profile.
+
+## Solver diagnostics
+
+`converged` is true only when the local solver reports that its gradient or cost
+tolerance was met. Line-search failures, interruptions, and iteration limits
+are not convergence. A cost-tolerance stop can still have a substantial gradient;
+the flag does not certify stationarity, global optimality, or palette quality.
+
+Global and per-seed diagnostics include an optional human-readable
+`termination_reason`. Older serialized diagnostics without that field remain
+readable. The message is diagnostic text and should not be parsed as a stable
+status code. `final_gradient_norm` is recomputed at the selected run's returned
+best parameters, instead of copying the last iterate's cached gradient, which
+can be stale or missing after a failed line search. Runs remain ranked by
+objective and then seed index; a converged but higher-cost run is not preferred.
+
 ## Quick start
 
 ```rust

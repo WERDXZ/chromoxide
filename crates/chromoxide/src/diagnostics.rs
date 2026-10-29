@@ -44,10 +44,18 @@ pub struct SeedDiagnostics {
     pub seed_index: usize,
     /// Final objective.
     pub objective: f64,
-    /// Solver converged state.
+    /// Whether the local solver met its gradient or cost tolerance.
+    /// Early failure, interruption, and iteration limits are not convergence.
     pub converged: bool,
     /// Iteration count.
     pub iterations: u64,
+    /// Human-readable solver stop reason; absent in older serialized results.
+    /// The message is diagnostic text, not a stable machine-readable code.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub termination_reason: Option<String>,
 }
 
 /// Global solver diagnostics.
@@ -58,12 +66,20 @@ pub struct SolverDiagnostics {
     pub seed_count: usize,
     /// Index of best seed.
     pub best_seed_index: usize,
-    /// Whether best run converged.
+    /// Whether the selected run met the solver's gradient or cost tolerance.
+    /// Cost tolerance alone does not guarantee a small final gradient.
     pub converged: bool,
     /// Iteration count of best run.
     pub iterations: u64,
-    /// L2 norm of best final gradient if available.
+    /// L2 norm of the finite-difference gradient at the returned best parameters,
+    /// if finite and evaluable. This is not the last iterate's cached gradient.
     pub final_gradient_norm: Option<f64>,
+    /// Human-readable stop reason of the selected run; absent in older results.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub termination_reason: Option<String>,
     /// Per-seed diagnostics.
     pub seed_runs: Vec<SeedDiagnostics>,
 }
@@ -80,7 +96,8 @@ pub struct PaletteSolution {
     pub objective: f64,
     /// Best seed index.
     pub seed_index: usize,
-    /// Best run convergence status.
+    /// Whether the selected run met its gradient or cost tolerance.
+    /// This does not certify global optimality or perceptual quality.
     pub converged: bool,
     /// Term-wise loss breakdown.
     pub term_breakdown: Vec<TermBreakdown>,
